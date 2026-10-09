@@ -1,11 +1,13 @@
-# Mill material code -> grade group. Auto-proposed from names and mass share, then 7 groups merged to 5 by clustering the fitted Cu/Sn/Ni/Mo (cut at 3); REVIEW (Q3).
+# Mill material code -> grade group. Auto-proposed from names and mass share, reduced to 4 groups for the demo (3A, 16A+6A, 25A+3ACh, iron units); REVIEW (Q3).
 # `category` links a group to research Table H2 for priors/yield/price (all ASSUMED).
 groups:
-  SCRAP_3A:      {category: shredded, codes: [205051], note: "86.6% of mass; mapped to Shredded (ASSUMED). Statistically distinct from every other group (cluster distance >= 3.2)"}
-  SCRAP_16A_6A:  {category: hms1,     codes: [205180, 205032, 601043], note: "16A + 6A (+ 6A briquets): merged by cluster cut at 3 (high Ni); category = HMS 1, the mass-leading member (ASSUMED)"}
+  SCRAP_3A:      {category: shredded, codes: [205051], note: "86.6% of mass; mapped to Shredded (ASSUMED)"}
+  SCRAP_16A_6A:  {category: hms1,     codes: [205180, 205032, 601043], note: "16A + 6A (+ 6A briquets): high Ni, the dirty group the drift scenario hits; category = HMS 1, the mass-leading member (ASSUMED)"}
   SCRAP_25A_3ACH: {category: shredded, codes: [601025, 601038, 601008, 602022, 602031, 205237, 205185], note: "25A family + 3ACh: merged by cluster cut at 3 (low Cu/Sn/Ni); category = Shredded, the mass-leading member 3ACh (ASSUMED)"}
   IRON_UNITS:    {category: pig_iron, codes: [201010, 201003], note: "Steelmaking iron + hot briquetted iron"}
-  OTHER_SCRAP:   {category: plate_structural, codes: [205179, 205236, 602017, 608017, 205240, 205191, 205181, 602014, 602023, 603168, 205045, 601024, 603111, 205044]}
+# DEMO SIMPLIFICATION: heats that charged any of these minor scrap codes (B11 and 'other', ~5% of all heats) are removed from the warehouse entirely.
+# The first surviving heat after each removed heat is marked as a chain start (heel chemistry = trailing median). Raw CSVs are untouched.
+dropped: [205179, 205236, 602017, 608017, 205240, 205191, 205181, 602014, 602023, 603168, 205045, 601024, 603111, 205044]
 # Codes in basket_charged that are not metallic charge (fluxes, carbon, alloys); excluded from the metallic mass balance.
 non_metallic: [360258, 140107, 364301, 203068, 203090, 705046, 705043, 203120, 202007, 202056, 202008, 202059, 205069, 364300, 202002, 203085, 202077, 202067, 705059, 202069, 202034, 140111, 202077]
 # Research Table H2 priors [INFERRED -> ASSUMED here]: Cu mean/sd, others mean (wt %), yield, bulk density t/m3.

@@ -13,6 +13,10 @@ from .bootstrap import block_bootstrap
 from .massbalance import ELEMENTS, build, predict
 
 
+RECOVERY_SEEDS = 20
+RECOVERY_MIN_COV = 0.75  # nominal 0.90; 20 seeds is noisy (sd ~0.07)
+
+
 def _mae(a, b):
     return float(np.mean(np.abs(a - b)))
 
@@ -45,12 +49,17 @@ def run_element(el: str) -> dict:
     days = d.heats.start_ts.dt.floor("D").astype("int64").to_numpy()
     bs = block_bootstrap(d.X[tr], d.y[tr], days[tr], mu0, sd0)
 
-    # synthetic recovery test (labelled): real X, known e_true, noise at observed level
-    rng = np.random.default_rng(1)
-    e_true = mu0 * rng.uniform(0.7, 1.3, len(mu0))
-    y_syn = d.X @ e_true + rng.normal(0, s, n)
-    e_rec = block_bootstrap(d.X, y_syn, days, mu0, sd0, n=100)
-    recovered = ((e_true >= e_rec["lo"]) & (e_true <= e_rec["hi"])).tolist()
+    # synthetic recovery test (labelled): real X, e_true drawn from the prior (so every group is tested at a
+    # different truth each seed), noise at the observed level. Reports 90% CI coverage per group over RECOVERY_SEEDS.
+    cov_hits = np.zeros(len(mu0))
+    for seed in range(RECOVERY_SEEDS):
+        rng = np.random.default_rng(1000 + seed)
+        e_true = np.maximum(rng.normal(mu0, sd0), 0.1 * mu0)
+        y_syn = d.X @ e_true + rng.normal(0, s, n)
+        e_rec = block_bootstrap(d.X, y_syn, days, mu0, sd0, n=60, seed=seed)
+        cov_hits += (e_true >= e_rec["lo"]) & (e_true <= e_rec["hi"])
+    recovery_cov = (cov_hits / RECOVERY_SEEDS).tolist()
+    recovered = [c >= RECOVERY_MIN_COV for c in recovery_cov]
 
     # final fit on all cohort heats for the production estimates
     e_all, _ = fit_bayes(d.X, d.y, mu0, sd0)
@@ -62,7 +71,7 @@ def run_element(el: str) -> dict:
         boot_train=dict(mean=bs["mean"].tolist(), sd=bs["sd"].tolist(), lo=bs["lo"].tolist(), hi=bs["hi"].tolist(), cov=bs["cov"].tolist(), point=e_bayes.tolist()),
         final=dict(mean=bs_all["mean"].tolist(), point=e_all.tolist(), sd=bs_all["sd"].tolist(),
                    lo=bs_all["lo"].tolist(), hi=bs_all["hi"].tolist(), cov=bs_all["cov"].tolist()),
-        recovery=recovered, cond=float(np.linalg.cond(d.X)),
+        recovery=recovered, recovery_cov=recovery_cov, cond=float(np.linalg.cond(d.X)),
         share=(d.X.sum(0) / d.X.sum()).tolist(),
         prev_measured_frac=float(d.prev_measured.mean()),
     )
@@ -83,11 +92,11 @@ def main() -> None:
         for k in r["mae"]:
             L.append(f"| {k} | {r['mae'][k]:.4f} | {r['rmse'][k]:.4f} |")
         L.append(f"\nBayes-NNLS 90% PI coverage on test: **{r['pi90_coverage']:.0%}**. Condition number of X: {r['cond']:.1f}\n")
-        L.append("| group | mass share | prior | NNLS | Bayes-NNLS (all heats) ± sd | 90% CI | synthetic recovery |\n|---|---|---|---|---|---|---|")
+        L.append("| group | mass share | prior | NNLS | Bayes-NNLS (all heats) ± sd | 90% CI | synthetic CI coverage (nominal 90%) |\n|---|---|---|---|---|---|---|")
         f = r["final"]
         for i, g in enumerate(GROUPS):
             L.append(f"| {g} | {r['share'][i]:.1%} | {r['prior']['mu'][i]:.3f}±{r['prior']['sd'][i]:.3f} | {r['nnls'][i]:.3f} | "
-                     f"{f['mean'][i]:.3f} ± {f['sd'][i]:.3f} | [{f['lo'][i]:.3f}, {f['hi'][i]:.3f}] | {'ok' if r['recovery'][i] else 'FAIL'} |")
+                     f"{f['mean'][i]:.3f} ± {f['sd'][i]:.3f} | [{f['lo'][i]:.3f}, {f['hi'][i]:.3f}] | {r['recovery_cov'][i]:.0%} {'ok' if r['recovery'][i] else 'FAIL'} |")
         L.append("")
     (ROOT / "Reference_Docs" / "reports" / "estimator.md").write_text("\n".join(L))
     print("\n".join(L))

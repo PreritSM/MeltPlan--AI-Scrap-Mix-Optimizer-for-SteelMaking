@@ -34,7 +34,7 @@ class World:
         self.reset(mode)
 
     # ------------------------------------------------------------ setup
-    def reset(self, mode: str | None = None, drift_factor: float = 12.0, seed: int = 7, drift_group: str = "SCRAP_16A_6A"):
+    def reset(self, mode: str | None = None, drift_factor: float = 12.0, seed: int = 7, drift_group: str = "SCRAP_25A_3ACH"):
         with self.lock:
             self.mode = mode or getattr(self, "mode", "SHADOW_REPLAY")
             self.store = PlanStore()
@@ -45,19 +45,23 @@ class World:
             self.replay = d.heats.iloc[int(0.85 * n):].reset_index(drop=True)      # held-out heats (REAL)
             self.replay_c_prev = {el: ds[el].c_prev[int(0.85 * n):] for el in ELS}
             self.B_all = d.B[int(0.85 * n):]
-            self.cursor = 0
+            # start on the first day whose next-24h window holds enough heats (removed heats leave gaps in the replay)
+            ts, min_heats = self.replay.start_ts, 8
+            self.clock = next((t0 for t0 in (d + timedelta(hours=6) for d in ts.dt.normalize().unique())
+                               if ((ts >= t0) & (ts < t0 + timedelta(hours=self.mill["plan_horizon_h"]))).sum() >= min_heats),
+                              ts.iloc[0].normalize() + timedelta(hours=6))
+            self.cursor = int((ts < self.clock).sum())
             self.ctx = make_context(variant="boot_train")
             raw = self.ctx.est
             sig = raw.sigma_eps
             self.kf = {el: ElementKF(raw.mu[el], raw.cov[el], sig[el]) for el in ELS}
             self.tracker = SurpriseTracker()
-            self.heel = {el: float(self.replay_c_prev[el][0]) for el in ELS}
+            self.heel = {el: float(self.replay_c_prev[el][self.cursor]) for el in ELS}
             self.drift_factor, self.rng = drift_factor, np.random.default_rng(seed)
             self.e_true = {el: raw.mu[el].copy() for el in ELS}
             if self.mode == "SIMULATED":
                 self.e_true["cu"][GROUPS.index(drift_group)] *= drift_factor
             self.drift_group = drift_group
-            self.clock = self.replay.start_ts.iloc[0].normalize() + timedelta(hours=6)
             self.plan_id: str | None = None
             self.progress: dict[int, str] = {}
             self.plan_heat0 = 0           # replay index of plan slot 1

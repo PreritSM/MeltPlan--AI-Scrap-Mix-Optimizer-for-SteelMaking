@@ -37,6 +37,7 @@ def build(db: Path = DB, raw_dir: Path = RAW) -> duckdb.DuckDBPyConnection:
     # material master (code -> group)
     rows = [(int(c), g, spec["category"]) for g, spec in gm["groups"].items() for c in spec["codes"]]
     rows += [(int(c), "NON_METALLIC", None) for c in gm["non_metallic"]]
+    rows += [(int(c), "NON_METALLIC", None) for c in gm["dropped"]]  # their heats are removed below; this only avoids "unmapped" noise
     con.execute("CREATE TABLE grade_map(mat_code BIGINT, grade_group VARCHAR, category VARCHAR)")
     con.executemany("INSERT INTO grade_map VALUES (?,?,?)", rows)
 
@@ -124,6 +125,23 @@ def build(db: Path = DB, raw_dir: Path = RAW) -> duckdb.DuckDBPyConnection:
       WITH b AS (SELECT heatid, basket_no, sum(t) AS t FROM heat_charge_basket GROUP BY 1, 2)
       SELECT basket_no, count(*) AS n, quantile_cont(t, 0.1) AS p10, quantile_cont(t, 0.5) AS p50,
              quantile_cont(t, 0.9) AS p90 FROM b WHERE t > 5 AND basket_no <= 3 GROUP BY 1 ORDER BY 1""")
+
+    # DEMO SIMPLIFICATION: remove every heat that charged a dropped code; the first surviving heat after each one becomes a chain start
+    dropped = ",".join(str(int(c)) for c in gm["dropped"])
+    con.execute(f"CREATE TABLE dropped_heats AS SELECT DISTINCT heatid FROM stg_charge WHERE mat_code IN ({dropped})")
+    con.execute("""
+      CREATE TABLE succ AS
+      SELECT heatid FROM (SELECT heatid, chain_start, lag(heatid) OVER (ORDER BY seq_no) AS prev FROM heat_fact)
+      WHERE NOT chain_start AND prev IN (SELECT heatid FROM dropped_heats) AND heatid NOT IN (SELECT heatid FROM dropped_heats)""")
+    con.execute("""INSERT INTO dq_issues SELECT 'heat_fact', heatid, 'dropped_scrap_code', 'heat removed (demo simplification)' FROM dropped_heats""")
+    con.execute("""INSERT INTO dq_issues SELECT 'heat_fact', heatid, 'chain_start', 'predecessor removed; heel chem = trailing median' FROM succ""")
+    con.execute("UPDATE heat_fact SET chain_start = TRUE WHERE heatid IN (SELECT heatid FROM succ)")
+    for t in ["stg_charge", "heat_charge_group", "heat_charge_basket", "heat_fact", "heat_chem", "heat_energy", "heat_additions"]:
+        con.execute(f"DELETE FROM {t} WHERE heatid IN (SELECT heatid FROM dropped_heats)")
+    con.execute("""CREATE OR REPLACE TABLE heat_fact AS
+                   SELECT * EXCLUDE (chain_id), sum(CASE WHEN chain_start THEN 1 ELSE 0 END) OVER (ORDER BY seq_no) AS chain_id
+                   FROM heat_fact ORDER BY seq_no""")
+    con.execute("DROP TABLE succ"); con.execute("DROP TABLE dropped_heats")
 
     # analysis cohort
     con.execute("""

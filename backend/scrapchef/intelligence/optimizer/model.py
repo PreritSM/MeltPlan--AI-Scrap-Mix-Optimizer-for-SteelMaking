@@ -118,7 +118,13 @@ def solve(ctx: Context, taps: list[float], mode: str = "chance", alpha: float = 
                 cons.append(k); tagged.append(("inventory", None, GROUPS[gi], k))
         obj = cp.Minimize(cp.sum(x @ cost_vec))
         prob = cp.Problem(obj, cons)
-        prob.solve(solver=cp.CLARABEL)
+        try:
+            prob.solve(solver=cp.CLARABEL)
+        except cp.error.SolverError:  # numerically hard heat: retry once with SCS, else report as unsolved
+            try:
+                prob.solve(solver=cp.SCS, eps=1e-6)
+            except cp.error.SolverError:
+                return dict(status="solver_error", x=None)
         if prob.status not in ("optimal", "optimal_inaccurate"):
             return dict(status=prob.status, x=None)
         X = x.value
