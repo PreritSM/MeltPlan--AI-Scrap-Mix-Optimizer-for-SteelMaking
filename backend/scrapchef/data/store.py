@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[2].parent
 DB = ROOT / "data" / "warehouse.duckdb"
 CFG = Path(__file__).resolve().parent.parent / "config"
 
-GROUPS = ["SCRAP_3A", "SCRAP_16A", "SCRAP_25A", "SCRAP_3ACH", "SCRAP_6A", "IRON_UNITS", "OTHER_SCRAP"]
+GROUPS = ["SCRAP_3A", "SCRAP_16A_6A", "SCRAP_25A_3ACH", "IRON_UNITS", "OTHER_SCRAP"]
 
 
 def cfg(name: str) -> dict:

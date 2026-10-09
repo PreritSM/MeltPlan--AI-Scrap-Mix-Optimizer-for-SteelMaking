@@ -34,7 +34,7 @@ class World:
         self.reset(mode)
 
     # ------------------------------------------------------------ setup
-    def reset(self, mode: str | None = None, drift_factor: float = 12.0, seed: int = 7, drift_group: str = "SCRAP_16A"):
+    def reset(self, mode: str | None = None, drift_factor: float = 12.0, seed: int = 7, drift_group: str = "SCRAP_16A_6A"):
         with self.lock:
             self.mode = mode or getattr(self, "mode", "SHADOW_REPLAY")
             self.store = PlanStore()

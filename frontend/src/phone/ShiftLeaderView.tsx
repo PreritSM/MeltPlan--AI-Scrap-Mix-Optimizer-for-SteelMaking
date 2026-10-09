@@ -4,7 +4,7 @@ import { useSim } from "../store/sim";
 export default function ShiftLeaderView() {
   const { phone, state, act } = useSim();
   const v = phone.shift_leader; const plan = v?.plan;
-  const [q, setQ] = useState(""); const [grp, setGrp] = useState("SCRAP_16A");
+  const [q, setQ] = useState(""); const [grp, setGrp] = useState("SCRAP_16A_6A");
   if (!plan?.heats) return <div className="small">No plan yet.</div>;
   const meas: Record<number, any> = Object.fromEntries((v.heat_log ?? []).map((h: any) => [h.slot, h.cu]));
   return (<div>

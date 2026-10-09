@@ -58,7 +58,7 @@ async def events(since: int = 0):
 class ResetBody(BaseModel):
     mode: str = "SHADOW_REPLAY"
     drift_factor: float = 12.0
-    drift_group: str = "SCRAP_16A"
+    drift_group: str = "SCRAP_16A_6A"
 
 
 @app.post("/api/sim/reset")

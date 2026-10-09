@@ -1,10 +1,8 @@
 # ASSUMED USD/t (research Tables H2/H3) by grade group; electricity/O2/carbon (A11)
 groups:
   SCRAP_3A: 430
-  SCRAP_16A: 375
-  SCRAP_25A: 460
-  SCRAP_3ACH: 430
-  SCRAP_6A: 310
+  SCRAP_16A_6A: 375
+  SCRAP_25A_3ACH: 430
   IRON_UNITS: 575
   OTHER_SCRAP: 450
 electricity_usd_per_mwh: 90
