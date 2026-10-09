@@ -1,0 +1,69 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useSim } from "../store/sim";
+import { post } from "../api/client";
+import { Headroom } from "../components/Headroom";
+
+const money = (v: number) => `$${v.toFixed(2)}`;
+
+function ControlSuite({ plan, groups, onClose }: { plan: any; groups: string[]; onClose: () => void }) {
+  const { act } = useSim();
+  const [slot, setSlot] = useState(1);
+  const heat = plan.heats.find((h: any) => h.slot === slot);
+  const [mix, setMix] = useState<Record<string, number>>({});
+  const [ev, setEv] = useState<any>(null);
+  const [ms, setMs] = useState<number | null>(null);
+  useEffect(() => { setMix({ ...heat.group_t }); }, [slot, plan.version]);
+  const t = useRef<any>(null);
+  useEffect(() => {
+    clearTimeout(t.current);
+    t.current = setTimeout(async () => { const s = performance.now(); try { setEv(await post("/api/plan/evaluate", { slot, group_t: mix })); setMs(performance.now() - s); } catch { /* ignore */ } }, 60);
+  }, [mix, slot]);
+  const total = Object.values(mix).reduce((a, b) => a + b, 0);
+  return (<div>
+    <div className="row"><b>Control Suite</b><span className="sp" /><button onClick={onClose}>Close</button></div>
+    <select value={slot} onChange={(e) => setSlot(+e.target.value)} aria-label="heat">{plan.heats.map((h: any) => <option key={h.slot} value={h.slot}>Heat {h.slot}{h.frozen ? " (frozen)" : ""}</option>)}</select>
+    {groups.map((g) => (<div key={g}><div className="small">{g.replace("SCRAP_", "")} · {(mix[g] ?? 0).toFixed(1)} t</div>
+      <input type="range" min={0} max={140} step={0.5} value={mix[g] ?? 0} onChange={(e) => setMix({ ...mix, [g]: +e.target.value })} aria-label={g} /></div>))}
+    <div className="small">Charge {total.toFixed(1)} t · tap {ev?.tap_actual_t?.toFixed(1) ?? "–"} t (target {heat.target_tap_t}) {ms !== null && `· ${ms.toFixed(0)} ms`}</div>
+    {ev && <>
+      <div><b>{money(ev.cost.per_t)}/t</b> <span style={{ color: ev.delta_cost_per_t > 0 ? "var(--bad)" : "var(--ok)" }}>({ev.delta_cost_per_t >= 0 ? "+" : ""}{ev.delta_cost_per_t.toFixed(2)} vs plan)</span></div>
+      {Object.entries(ev.predicted).map(([el, p]: any) => <Headroom key={el} el={el} p={p} />)}
+      {ev.violations.length > 0 && <div className="banner">Over limit: {ev.violations.join(", ").toUpperCase()}</div>}
+    </>}
+    <div className="row"><button onClick={() => setMix({ ...heat.group_t })}>Revert</button>
+      <button className="primary" onClick={async () => { await act("/api/plan/edit", { slot, group_t: mix }); onClose(); }}>Save as new version</button></div>
+  </div>);
+}
+
+export default function SupervisorView() {
+  const { phone, state, act } = useSim();
+  const v = phone.supervisor; const plan = v?.plan;
+  const [edit, setEdit] = useState(false); const [slot, setSlot] = useState(1);
+  const [q, setQ] = useState(""); const [ans, setAns] = useState<string[]>([]);
+  const groups = useMemo(() => state?.groups ?? [], [state]);
+  if (!plan?.heats) return <div className="small">No plan yet. Use “Plan 06:00” in the Process View.</div>;
+  if (edit) return <ControlSuite plan={plan} groups={groups} onClose={() => setEdit(false)} />;
+  const heat = plan.heats.find((h: any) => h.slot === slot) ?? plan.heats[0];
+  const canApprove = plan.status === "EMAILED";
+  return (<div>
+    {v.drift_alert && <div className="banner">⚠ {v.drift_alert.text}</div>}
+    <div className="row"><b>Plan v{plan.version}</b><span className="chip shadow">{plan.status}</span></div>
+    <div><b>{money(plan.cost.per_t)}/t</b> <span className="small">vs baseline {money(plan.cost.baseline_per_t)}/t ({plan.cost.delta_vs_baseline >= 0 ? "+" : ""}{plan.cost.delta_vs_baseline.toFixed(2)})</span></div>
+    <div className="small">{plan.summary.n_heats} heats · {Object.entries(plan.summary.tonnes_by_group).map(([g, t]: any) => `${g.replace("SCRAP_", "")} ${t}t`).join(" · ")}</div>
+    {plan.explanation && <div className="mail"><div className="small">Agent</div>{plan.explanation}</div>}
+    <div className="row"><b>Headroom, heat</b>
+      <select value={slot} onChange={(e) => setSlot(+e.target.value)} aria-label="heat">{plan.heats.map((h: any) => <option key={h.slot} value={h.slot}>{h.slot}</option>)}</select></div>
+    {Object.entries(heat.headroom).map(([el, p]: any) => <Headroom key={el} el={el} p={p} />)}
+    <div className="small"><b>Binding constraints</b></div>
+    {plan.binding.length ? plan.binding.slice(0, 3).map((b: any, i: number) => <div key={i} className="small">• {b.plain}</div>) : <div className="small">None binding.</div>}
+    {v.backtest && <div className="small" style={{ marginTop: 6 }}>Back-test: {v.backtest.saving_pct.toFixed(1)}% cheaper at same risk (ASSUMED prices)</div>}
+    <div className="row">
+      <button className="primary" disabled={!canApprove} onClick={() => act("/api/plan/approve")}>Approve</button>
+      <button onClick={() => setEdit(true)}>Edit</button>
+      <button className="danger" disabled={plan.status === "RELEASED"} onClick={() => act("/api/plan/reject", { reason: "Supervisor requested a new plan" })}>Reject</button>
+    </div>
+    <input type="text" placeholder="Ask the agent (why / cost / risk)…" value={q} onChange={(e) => setQ(e.target.value)} />
+    <div className="row"><button disabled={!q} onClick={async () => { const r = await act("/api/chat", { role: "supervisor", text: q }); setAns([...ans, r.answer]); setQ(""); }}>Ask</button></div>
+    {ans.slice(-3).map((a, i) => <div key={i} className="mail">{a}</div>)}
+  </div>);
+}

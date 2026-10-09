@@ -1,0 +1,8 @@
+# ASSUMED spec classes (A3). Cu from research Table H4; the rest are placeholders.
+default: plant_strict
+classes:
+  rebar: {cu: 0.40, sn: 0.03, ni: 0.25, mo: 0.08, cr: 0.25}
+  sbq:   {cu: 0.35, sn: 0.03, ni: 0.25, mo: 0.08, cr: 0.25}
+  # ASSUMED: anchored to the plant measured final-chemistry p95 so the constraints actually bind in the demo
+  plant_tight: {cu: 0.25, sn: 0.0115, ni: 0.20, mo: 0.08, cr: 0.25}
+  plant_strict: {cu: 0.21, sn: 0.0115, ni: 0.20, mo: 0.08, cr: 0.25}  # ASSUMED: tighter product so Cu binds (shadow price shown)

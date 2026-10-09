@@ -1,0 +1,10 @@
+Plan.md
+data/raw/
+data/*.duckdb
+data/*.sqlite
+.venv/
+__pycache__/
+node_modules/
+dist/
+EAF Kaggle Dataset/
+Reference_Docs/

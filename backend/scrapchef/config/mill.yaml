@@ -1,0 +1,12 @@
+# ASSUMED plant parameters (A2, A4, A5, A12, A13, A16)
+rated_tap_t: 125.0
+capacity_t: 140.0
+heel_t: 17.5
+heel_chain_break_h: 24
+plan_horizon_h: 24
+plan_time: "06:00"
+alpha: 0.05
+drift_k_sigma: 2.0
+anti_churn_usd_per_t: 0.25
+grab_size_t: 4.0
+elements: [cu, sn, ni, mo]

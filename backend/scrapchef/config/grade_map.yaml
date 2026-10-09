@@ -1,0 +1,21 @@
+# Mill material code -> grade group. Auto-proposed from names and mass share; REVIEW (Q3).
+# `category` links a group to research Table H2 for priors/yield/price (all ASSUMED).
+groups:
+  SCRAP_3A:   {category: shredded,  codes: [205051], note: "86.6% of mass; mapped to Shredded (ASSUMED)"}
+  SCRAP_16A:  {category: hms1,      codes: [205180], note: "ASSUMED HMS 1"}
+  SCRAP_25A:  {category: busheling, codes: [601025, 601038, 601008, 602022, 602031], note: "25A family; ASSUMED busheling"}
+  SCRAP_3ACH: {category: shredded,  codes: [205237, 205185], note: "3ACh variant"}
+  SCRAP_6A:   {category: hms2,      codes: [205032, 601043], note: "6A and 6A briquets; ASSUMED HMS 2"}
+  IRON_UNITS: {category: pig_iron,  codes: [201010, 201003], note: "Steelmaking iron + hot briquetted iron"}
+  OTHER_SCRAP: {category: plate_structural, codes: [205179, 205236, 602017, 608017, 205240, 205191, 205181, 602014, 602023, 603168, 205045, 601024, 603111, 205044]}
+# Codes in basket_charged that are not metallic charge (fluxes, carbon, alloys); excluded from the metallic mass balance.
+non_metallic: [360258, 140107, 364301, 203068, 203090, 705046, 705043, 203120, 202007, 202056, 202008, 202059, 205069, 364300, 202002, 203085, 202077, 202067, 705059, 202069, 202034, 140111, 202077]
+# Research Table H2 priors [INFERRED -> ASSUMED here]: Cu mean/sd, others mean (wt %), yield, bulk density t/m3.
+categories:
+  busheling:        {cu: [0.07, 0.02],   sn: 0.005, ni: 0.04, cr: 0.05, mo: 0.01,  yield: 0.95, density: 0.6}
+  shredded:         {cu: [0.22, 0.06],   sn: 0.015, ni: 0.08, cr: 0.10, mo: 0.02,  yield: 0.92, density: 1.0}
+  hms1:             {cu: [0.20, 0.06],   sn: 0.010, ni: 0.10, cr: 0.12, mo: 0.02,  yield: 0.91, density: 0.8}
+  hms2:             {cu: [0.32, 0.09],   sn: 0.020, ni: 0.12, cr: 0.15, mo: 0.03,  yield: 0.88, density: 0.6}
+  plate_structural: {cu: [0.15, 0.04],   sn: 0.008, ni: 0.10, cr: 0.12, mo: 0.02,  yield: 0.94, density: 1.0}
+  pig_iron:         {cu: [0.005, 0.002], sn: 0.002, ni: 0.01, cr: 0.02, mo: 0.005, yield: 0.95, density: 3.5}
+  hbi:              {cu: [0.002, 0.001], sn: 0.002, ni: 0.01, cr: 0.02, mo: 0.005, yield: 0.88, density: 2.5}
