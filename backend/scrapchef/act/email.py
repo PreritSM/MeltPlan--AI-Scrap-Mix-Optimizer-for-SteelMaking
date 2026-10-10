@@ -47,6 +47,6 @@ def render(plan: PlanVersion, date: str, baseline_per_t: float | None, rationale
         shown = [c.plain for c in plan.binding[:2] if c.plain not in rationale]   # the rationale may already quote one
         if shown:
             lines += ["Binding constraints:"] + [f" - {p}" for p in shown] + [""]
-    lines += [rationale, "", "[Open in ScrapChef]  [Reply]"]
+    lines += [rationale]
     return dict(to="supervisor@mill.example", channel="MOCK", subject=f"ScrapChef plan v{plan.version} for {date}",
                 body="\n".join(lines), plan_id=plan.plan_id, version=plan.version)

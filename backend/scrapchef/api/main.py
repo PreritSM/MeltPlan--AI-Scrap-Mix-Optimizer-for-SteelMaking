@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import traceback
 
 from fastapi import FastAPI, HTTPException, Request
@@ -17,7 +18,9 @@ from scrapchef.sim.world import World
 
 app = FastAPI(title="Mini-ScrapChef")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
-world = World("SHADOW_REPLAY", agent_async=True)  # agent runs in a worker so the UI stays responsive
+# agent runs in a worker so the UI stays responsive; the API is the single owner of data/app.sqlite (D36)
+# SCRAPCHEF_APP_DB overrides it (tests import this module and set ":memory:")
+world = World("SHADOW_REPLAY", agent_async=True, store_path=os.environ.get("SCRAPCHEF_APP_DB") or ROOT / "data" / "app.sqlite")
 
 
 def guard(fn):

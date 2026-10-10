@@ -1,4 +1,6 @@
 """Regression tests for the replay, event-stream, versioning and tap/yield fixes."""
+import os
+
 import numpy as np
 import pytest
 
@@ -95,3 +97,31 @@ def test_plan_is_done_when_every_heat_is_tapped_and_play_stops():
     assert w.current_plan().status == "DONE"
     cursor = w.cursor
     assert c.post("/api/sim/step_heat").json()["done"] and w.cursor == cursor   # no replay beyond the plan
+
+
+def test_two_worlds_in_one_process_keep_their_own_plans():
+    a, b = World("SHADOW_REPLAY"), World("SHADOW_REPLAY")   # no store_path: each gets a private in-memory store
+    plan = a.make_plan()
+    assert plan is not None and a.current_plan() is not None
+    assert b.store.versions() == [] and b.current_plan() is None
+    b.reset()
+    assert a.current_plan().version == plan.version
+
+
+def test_a_db_owned_by_another_process_is_refused_and_not_wiped(tmp_path):
+    import sqlite3
+    import subprocess
+    import sys
+    db = tmp_path / "app.sqlite"
+    owner = subprocess.Popen([sys.executable, "-c", "import sys; from scrapchef.act.plans import PlanStore; "
+                              f"s = PlanStore({str(db)!r}); s.emit('t', 'k', {{}}, []); print('owned', flush=True); sys.stdin.read()"],
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    try:
+        assert owner.stdout.readline().strip() == "owned"
+        with pytest.raises(RuntimeError, match="owned by another running ScrapChef process"):
+            PlanStore(db)
+        assert sqlite3.connect(db).execute("SELECT count(*) FROM events").fetchone()[0] == 1   # nothing was dropped
+    finally:
+        owner.communicate("")
+    s = PlanStore(db)                      # the owner has exited: this process may take the file
+    assert PlanStore(db).epoch != s.epoch  # and re-open it on a reset (the lock is held once per process)

@@ -74,6 +74,6 @@ Tests never call the LLM (`SCRAPCHEF_LLM=off` in `tests/conftest.py`).
 - In lab/drift runs a crane message can still go out without a plan following (the missing-proposal rule covers issue, inbox and rejection only); the sim-clock pause makes this unlikely.
 - `prices.yaml` prices SCRAP_3A and SCRAP_25A_3ACH the same (430 $/t), so low-Cu scrap has no premium; that is why the plan uses ~32% 25A_3ACH.
 - The binding constraints shown for a hand-edited version are its parent version's shadow prices.
-- UI stubs: the email mentions "[Reply]" but has no Reply button; Reject sends a fixed reason (no reason box); "Basket complete" only switches the crane tab.
-- Any second process that builds a `World` drops the tables in `data/app.sqlite` (the live API's plans). Scratch scripts must point `scrapchef.act.plans.ROOT` at a temp dir.
+- UI stubs: Reject sends a fixed reason (no reason box); "Basket complete" only switches the crane tab.
+- The API is the single owner of `data/app.sqlite` (D36). Scripts and REPLs that build a `World()` get a private in-memory store; opening the file from a second process while the API runs raises an error.
 - cvxpy reports "Solution may be inaccurate" on later heel passes of the exclude-3ACh option at α = 0.10; `optimal_inaccurate` is accepted (matches neighbouring passes to ~0.003%).

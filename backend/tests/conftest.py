@@ -1,6 +1,11 @@
+import os
+
 import pytest
 
 import scrapchef.act.plans as plans
+
+# set before any test module imports scrapchef.api.main, whose module-level World would otherwise open data/app.sqlite
+os.environ["SCRAPCHEF_APP_DB"] = ":memory:"
 
 
 @pytest.fixture(autouse=True, scope="session")

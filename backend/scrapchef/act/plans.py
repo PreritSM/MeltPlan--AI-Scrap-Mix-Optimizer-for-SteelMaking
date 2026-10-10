@@ -1,14 +1,16 @@
 """ACT layer: plan versions, approval state machine, audit log, events (SQLite)."""
 from __future__ import annotations
 
+import fcntl
 import json
+import os
 import sqlite3
 import threading
 import uuid
 from pathlib import Path
 
 from scrapchef.contracts.models import PlanVersion
-from scrapchef.data.store import ROOT
+from scrapchef.data.store import ROOT  # noqa: F401  (tests repoint it; the store itself no longer defaults to a file)
 
 ALLOWED = {
     "PROPOSED": {"EMAILED", "SUPERSEDED", "REJECTED"},
@@ -20,9 +22,32 @@ ALLOWED = {
 }
 
 
+_OWNED: dict[str, int] = {}   # resolved db path -> lock fd held for the life of this process (D36)
+
+
+def _own(db: Path) -> None:
+    """Exclusive, non-blocking advisory lock on <db>.lock, taken once per path per process (flock is per open file,
+    and a reset re-creates the store). Another process holding it means another server owns the file: refuse."""
+    key = str(db.resolve())
+    if key in _OWNED:
+        return
+    fd = os.open(key + ".lock", os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        raise RuntimeError(f"{db} is owned by another running ScrapChef process (the API). "
+                           "Use World() without store_path for scripts.") from None
+    _OWNED[key] = fd
+
+
 class PlanStore:
     def __init__(self, path: Path | str | None = None):
-        self.db = sqlite3.connect(str(path or ROOT / "data" / "app.sqlite"), check_same_thread=False)
+        """path=None: a private in-memory store (scripts, REPLs, tests). A file path is the operational DB; only one
+        process may own it, so a second process raises here before anything is dropped."""
+        if path is not None and str(path) != ":memory:":
+            _own(Path(path))
+        self.db = sqlite3.connect(str(path) if path is not None else ":memory:", check_same_thread=False)
         self.lock = threading.RLock()     # one connection is shared by request threads and the SSE reader
         self.epoch = uuid.uuid4().hex[:8]  # changes on every reset; event seq restarts at 1, so SSE ids carry the epoch
         self.db.executescript("""

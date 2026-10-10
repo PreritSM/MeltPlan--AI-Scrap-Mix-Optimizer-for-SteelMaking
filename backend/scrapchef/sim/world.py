@@ -5,9 +5,11 @@ SIMULATED (scripted drift; lab results generated from OUR plan; clearly labelled
 from __future__ import annotations
 
 import copy
+import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -28,6 +30,8 @@ from scrapchef.intelligence.optimizer.model import ELS, make_context
 from scrapchef.intelligence.optimizer.plan import build_plan, heat_from_groups
 from scrapchef.read.mock.adapters import MockHandling, MockInventory, MockSchedule
 
+log = logging.getLogger(__name__)
+
 ISO = "%Y-%m-%dT%H:%M:%S"
 
 
@@ -39,8 +43,11 @@ def _with(ctx, **kw):
 
 
 class World:
-    def __init__(self, mode: str = "SHADOW_REPLAY", agent_async: bool = False, llm: LLM | None = None):
+    def __init__(self, mode: str = "SHADOW_REPLAY", agent_async: bool = False, llm: LLM | None = None,
+                 store_path: str | Path | None = None):
         self.lock = threading.RLock()
+        self.store_path = store_path                        # None: in-memory store; only the API passes data/app.sqlite (D36)
+        self._lost_plan_logged: str | None = None
         self.mill = cfg("mill")
         self.llm = llm or LLM()
         self.agent_async = agent_async                      # the API runs the agent in a worker; tests run it inline
@@ -52,7 +59,7 @@ class World:
     def reset(self, mode: str | None = None, drift_factor: float = 1.5, seed: int = 7, drift_group: str = "SCRAP_3A"):
         with self.lock:
             self.mode = mode or getattr(self, "mode", "SHADOW_REPLAY")
-            self.store = PlanStore()
+            self.store = PlanStore(self.store_path)
             self.rm_cache: dict = {}
             self.handling = MockHandling()
             ds = {el: build(el) for el in ELS}
@@ -114,7 +121,11 @@ class World:
     def current_plan(self) -> PlanVersion | None:
         if not self.plan_id:
             return None
-        vs = [p for p in self.store.versions() if p.plan_id == self.plan_id and p.status not in ("SUPERSEDED", "REJECTED")]
+        mine = [p for p in self.store.versions() if p.plan_id == self.plan_id]
+        if not mine and self._lost_plan_logged != self.plan_id:   # once per plan: this is polled on every state read
+            self._lost_plan_logged = self.plan_id
+            log.error("plan store lost plan %s: was the DB wiped by another process?", self.plan_id)
+        vs = [p for p in mine if p.status not in ("SUPERSEDED", "REJECTED")]
         return vs[-1] if vs else None
 
     def _baseline_heats(self):
