@@ -3,6 +3,7 @@ import { useSim } from "../store/sim";
 import { post } from "../api/client";
 import { Headroom } from "../components/Headroom";
 import { AgentMessages, ChatThread } from "../components/Agent";
+import { sym } from "../format";
 
 const money = (v: number) => `$${v.toFixed(2)}`;
 
@@ -29,7 +30,7 @@ function ControlSuite({ plan, groups, onClose }: { plan: any; groups: string[]; 
     {ev && <>
       <div><b>{money(ev.cost.per_t)}/t</b> <span style={{ color: ev.delta_cost_per_t > 0 ? "var(--bad)" : "var(--ok)" }}>({ev.delta_cost_per_t >= 0 ? "+" : ""}{ev.delta_cost_per_t.toFixed(2)} vs plan)</span></div>
       {Object.entries(ev.predicted).map(([el, p]: any) => <Headroom key={el} el={el} p={p} />)}
-      {ev.violations.length > 0 && <div className="banner">Over limit: {ev.violations.join(", ").toUpperCase()}</div>}
+      {ev.violations.length > 0 && <div className="banner">Over limit: {ev.violations.map(sym).join(", ")}</div>}
       {ev.process_violations?.map((v: string) => <div key={v} className="banner">⚠ {v}</div>)}
     </>}
     <div className="row"><button onClick={() => setMix({ ...heat.group_t })}>Revert</button>
@@ -51,7 +52,7 @@ export default function SupervisorView() {
     <div className="row"><b>Plan v{plan.version}</b><span className="chip shadow">{plan.status}</span></div>
     <div><b>{money(plan.cost.per_t)}/t</b> <span className="small">{plan.cost.risk_match ? "plan, held to the 95% limits" : `vs historical mix ${money(plan.cost.baseline_per_t)}/t (not risk-matched)`}</span></div>
     {plan.cost.risk_match && <div className="small">
-      Historical mix {money(plan.cost.risk_match.hist_per_t)}/t, up to {(plan.cost.risk_match.worst_p * 100).toFixed(0)}% chance of breaching {plan.cost.risk_match.worst_el.toUpperCase()}.
+      Historical mix {money(plan.cost.risk_match.hist_per_t)}/t, up to {(plan.cost.risk_match.worst_p * 100).toFixed(0)}% chance of breaching {sym(plan.cost.risk_match.worst_el)}.
       Optimiser at that same risk: {money(plan.cost.risk_match.matched_per_t)}/t ({plan.cost.risk_match.matched_per_t - plan.cost.risk_match.hist_per_t >= 0 ? "+" : ""}{(plan.cost.risk_match.matched_per_t - plan.cost.risk_match.hist_per_t).toFixed(2)}).
       Plan vs that: {plan.cost.per_t - plan.cost.risk_match.matched_per_t >= 0 ? "+" : ""}{(plan.cost.per_t - plan.cost.risk_match.matched_per_t).toFixed(2)}/t for the 95% limits.</div>}
     <div className="small">{plan.summary.n_heats} heats · {Object.entries(plan.summary.tonnes_by_group).map(([g, t]: any) => `${g.replace("SCRAP_", "")} ${t}t`).join(" · ")}</div>

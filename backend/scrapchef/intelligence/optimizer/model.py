@@ -9,6 +9,7 @@ import numpy as np
 from scipy.stats import norm
 
 from scrapchef.data.store import GROUPS, ROOT, cfg, group_yields, last_chem, recipe_bounds
+from scrapchef.intelligence.estimator.massbalance import sym
 
 ELS = ["cu", "sn", "ni", "mo"]
 HEEL_PASSES, HEEL_TOL = 6, 1e-4   # A14 fixed point (wt%): 2 fixed passes left later heats ~0.2 pp above alpha; settles in 4-5
@@ -159,7 +160,7 @@ def duals(ctx: Context, res, slot0: int = 1) -> list[dict]:
             if abs(per_001) < 0.005:          # solver noise on a slack constraint: it would read "worth $0.00/t"
                 continue
             out.append(dict(kind=kind, heat=h, key=key, dual=d, usd_per_t_per_0p01pct=per_001,
-                            plain=f"Heat {h + slot0}: each extra 0.01% {key.upper()} headroom is worth ${per_001:.2f}/t"))
+                            plain=f"Heat {h + slot0}: each extra 0.01% {sym(key)} headroom is worth ${per_001:.2f}/t"))
         elif kind == "inventory":
             out.append(dict(kind=kind, heat=None, key=key, dual=d, usd_per_t_per_0p01pct=None,
                             plain=f"Each extra tonne of {key} would save ${abs(d):.2f}"))  # cvxpy dual of a <= row is >= 0

@@ -16,6 +16,11 @@ from scrapchef.data.store import GROUPS, cfg, group_yields, heat_table
 ELEMENTS = ["cu", "sn", "ni", "mo"]
 
 
+def sym(el: str) -> str:
+    """Display form of an element key: "cu" -> "Cu". Keys stay lowercase everywhere else."""
+    return el[:1].upper() + el[1:]
+
+
 @dataclass
 class Design:
     element: str

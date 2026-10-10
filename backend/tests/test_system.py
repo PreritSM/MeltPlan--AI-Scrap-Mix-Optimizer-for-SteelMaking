@@ -46,7 +46,7 @@ def test_state_machine_rejects_illegal_transition(sim):
 
 
 def test_narrator_faithfulness():
-    facts = dict(decision="replan", version=2, trigger_text="CU 2.4σ.", n_heats=3, moves=[dict(group="SCRAP_25A_3ACH", delta_t=-5.0)],
+    facts = dict(decision="replan", version=2, trigger_text="Cu 2.4σ.", n_heats=3, moves=[dict(group="SCRAP_25A_3ACH", delta_t=-5.0)],
                  cost_delta_per_t=0.2, new_per_t=480.0, reason="")
     assert narrator.faithful("Moved 5.0 t, cost +0.2 over 3 heats.", facts)
     assert not narrator.faithful("Saved 17 dollars.", facts)

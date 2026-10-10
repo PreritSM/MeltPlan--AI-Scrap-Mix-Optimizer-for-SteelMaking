@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from scrapchef.intelligence.estimator.massbalance import sym
+
 
 class SurpriseTracker:
     """Lab surprise: |measured - predicted| / sigma_pred for the actual charge. Single |z|>3, or mean of last 3 z > 2.0."""
@@ -15,7 +17,7 @@ class SurpriseTracker:
         zs.append(z)
         last = zs[-self.hist:]
         if abs(z) > 3.0:
-            return f"{element.upper()} lab result {z:+.1f}σ from prediction"
+            return f"{sym(element)} lab result {z:+.1f}σ from prediction"
         if len(last) == self.hist and abs(np.mean(last)) > 2.0:
-            return f"{element.upper()} running {np.mean(last):+.1f}σ from prediction over last {self.hist} heats"
+            return f"{sym(element)} running {np.mean(last):+.1f}σ from prediction over last {self.hist} heats"
         return None

@@ -11,7 +11,7 @@ from scrapchef.data.features import split_heats
 from scrapchef.data.store import GROUPS, ROOT, priors
 from .bayes import fit_bayes, fit_nnls
 from .bootstrap import block_bootstrap
-from .massbalance import ELEMENTS, build, predict
+from .massbalance import ELEMENTS, build, predict, sym
 
 
 RECOVERY_SEEDS = 20
@@ -87,7 +87,7 @@ def main() -> None:
          f"Metallic yield (A4, Table H2 group yields, shared with the optimiser): **{res[0]['yield_']:.3f}** effective over the cohort. Heats with a measured previous-heat chemistry: "
          f"{res[0]['prev_measured_frac']:.0%} (others use the trailing median as heel chemistry).\n"]
     for r in res:
-        el = r["element"].upper()
+        el = sym(r["element"])
         L.append(f"## {el} (n={r['n_heats']} heats)\n")
         L.append("| method | test MAE (wt %) | test RMSE |\n|---|---|---|")
         for k in r["mae"]:

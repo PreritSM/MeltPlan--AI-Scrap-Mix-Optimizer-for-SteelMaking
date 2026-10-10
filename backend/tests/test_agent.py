@@ -70,7 +70,7 @@ def test_guards_reject_bad_arguments_invented_numbers_and_crane_costs(world):
 
 
 def test_anti_churn_blocks_a_pointless_replan(world):
-    t = AgentTools(world, dict(kind="lab_surprise", text="CU +3.1σ.", role=None))
+    t = AgentTools(world, dict(kind="lab_surprise", text="Cu +3.1σ.", role=None))
     cand = t.call("run_optimizer", {})  # same estimates -> same plan -> ~0 $/t change
     rat = dict(email="ok", supervisor="ok", shift_leader="ok", crane="ok")
     assert "Anti-churn" in t.call("propose_plan", dict(candidate_id=cand["candidate_id"], rationale=rat))["error"]
@@ -242,7 +242,7 @@ def test_unsafe_live_plan_after_a_lab_result_is_not_left_alone(world):
     world.kf["cu"].e = world.kf["cu"].e * 1.12   # copper-heavier estimates: the live plan now breaches the risk level
     assert max(world.open_eval()["worst_p_exceed"].values()) > world.alpha + 0.01
     llm = FakeLLM([call("run_optimizer", {}), Reply(content="Infeasible, so no proposal."), Reply(content="Still no proposal.")])
-    rec = loop.handle(world, dict(kind="lab_surprise", text="CU lab result above the limit.", role=None, ts=world._ts()), llm)
+    rec = loop.handle(world, dict(kind="lab_surprise", text="Cu lab result above the limit.", role=None, ts=world._ts()), llm)
     assert any(m["role"] == "user" and "above alpha" in m["content"] for m in llm.calls[-1])
     assert rec["path"] == "fallback after LLM" and rec["decision"] == "replan"
 

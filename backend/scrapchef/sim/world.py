@@ -22,7 +22,7 @@ from scrapchef.intelligence.agent import loop as agent_loop
 from scrapchef.intelligence.agent.llm import LLM
 from scrapchef.intelligence.agent.triggers import SurpriseTracker
 from scrapchef.intelligence.estimator.kalman import ElementKF
-from scrapchef.intelligence.estimator.massbalance import build
+from scrapchef.intelligence.estimator.massbalance import build, sym
 from scrapchef.intelligence.optimizer.evaluate import evaluate_mix, risk_matched_baseline
 from scrapchef.intelligence.optimizer.model import ELS, make_context
 from scrapchef.intelligence.optimizer.plan import build_plan, heat_from_groups
@@ -258,7 +258,7 @@ class World:
                 trig.append(t)
             lim = cfg("specs")["classes"][self.spec_class].get(el)
             if lim is not None and meas[el] > lim:  # blueprint trigger: lab result above the limit
-                trig.append(f"{el.upper()} lab result {meas[el]:.3f}% is above the {lim}% limit")
+                trig.append(f"{sym(el)} lab result {meas[el]:.3f}% is above the {lim}% limit")
             out[el] = dict(predicted=float(mean), measured=meas[el], z=float(z), sd=float(sd))
             heel_next[el] = meas[el]
         self.heel = heel_next
@@ -283,7 +283,7 @@ class World:
             self._emit("plan_done", {"version": p.version}, ["process", "supervisor", "shift_leader", "crane"])
         if rec["drift"]:
             self.drift_alert = dict(ts=rec["ts"], groups=rec["drift"],
-                                    text="Composition drift: " + "; ".join(f"{e.upper()} in {', '.join(g)}" for e, g in rec["drift"].items()))
+                                    text="Composition drift: " + "; ".join(f"{sym(e)} in {', '.join(g)}" for e, g in rec["drift"].items()))
             self._emit("drift", self.drift_alert, ["process", "supervisor", "shift_leader"])
         if (rec["triggers"] or rec["drift"]) and (self.open_eval() or {}).get("open_slots"):  # nothing to re-plan once all heats are tapped
             why = (rec["triggers"] or [self.drift_alert["text"]])[0]

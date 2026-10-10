@@ -1,4 +1,5 @@
 import { Badge, f } from "../components/Badge";
+import { sym } from "../format";
 
 const Table = ({ rows, cols }: { rows: any[]; cols?: string[] }) => {
   if (!rows?.length) return <div className="small">No rows.</div>;
@@ -44,7 +45,7 @@ export default function Inspector({ card, onClose }: { card: any; onClose: () =>
   if (card.id === "estimator" && i.estimates) {
     body = (<>
       {Object.entries(i.estimates).map(([el, e]: any) => (
-        <div key={el}><h4>{el.toUpperCase()} (wt %): prior vs Bayes-NNLS, 90% CI</h4>
+        <div key={el}><h4>{sym(el)} (wt %): prior vs Bayes-NNLS, 90% CI</h4>
           <Table rows={e.groups.map((g: string, k: number) => ({ group: g, prior: e.prior[k], estimate: e.mean[k], ci_lo: e.lo[k], ci_hi: e.hi[k], online_kalman: i.online_kalman?.[el]?.[k] }))} /></div>))}
       <h4>Held-out test MAE (wt %)</h4>
       <Table rows={Object.entries(i.metrics).map(([el, m]: any) => ({ element: el, ...m.mae, pi90_coverage: m.coverage }))} />
@@ -54,7 +55,7 @@ export default function Inspector({ card, onClose }: { card: any; onClose: () =>
         <Table rows={Object.entries(i.last_heat.elements).map(([el, v]: any) => ({ element: el, predicted: v.predicted, measured: v.measured, z: v.z }))} /></>}
     </>);
   } else if (card.id === "optimizer") {
-    body = (<><p>Spec class <b>{i.spec_class}</b> (limits ASSUMED, wt %): {Object.entries(i.limits).map(([k, v]) => `${k.toUpperCase()} ${v}`).join(" · ")}</p>
+    body = (<><p>Spec class <b>{i.spec_class}</b> (limits ASSUMED, wt %): {Object.entries(i.limits).map(([k, v]) => `${sym(k)} ${v}`).join(" · ")}</p>
       <h4>Binding constraints / shadow prices</h4>
       {i.binding?.length ? <Table rows={i.binding.slice(0, 12).map((b: any) => ({ constraint: b.name, kind: b.kind, plain: b.plain }))} /> : <div className="small">No binding constraint.</div>}</>);
   } else if (card.id === "agent") {
