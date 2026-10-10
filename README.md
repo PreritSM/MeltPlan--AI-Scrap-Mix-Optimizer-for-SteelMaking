@@ -12,14 +12,17 @@ Switch the mode selector to *Simulated drift scenario*, then ▶ to watch the ag
 The agent (`backend/scrapchef/intelligence/agent/`) is a tool-use loop: the LP decides, the LLM chooses optimiser settings, explores options and explains.
 It wakes on lab results (surprise or above the limit), drift, free-text issues, rejections, questions and inbound emails; the 06:00 plan stays deterministic.
 Tools: `get_state`, `run_optimizer`, `evaluate_mix`, `compare_plans`, `propose_plan` (needs supervisor approval), `send_message`.
-Guards: numbers in any text must come from tool results, no prices to the crane, anti-churn, 8 tool calls / 60 s per run.
+Guards: numbers in any text must come from tool results, no prices to the crane, anti-churn, 10 tool calls / 60 s per run; a feasible candidate that was never proposed gets one reminder, then the fallback publishes.
 Without a key, or on any LLM failure, a deterministic fallback (`policy.py`) runs the same tools. The Process View agent card shows which path ran.
 
-LLM: GLM 5.3 through NVIDIA's OpenAI-compatible endpoint. Put the key in `backend/.env` (gitignored):
+LLM: any OpenAI-compatible endpoint, set in `backend/.env` (gitignored). Demo default, DeepSeek flash (supplier email: 3/3 runs on the LLM path, 25–39 s):
 ```
-NVIDIA_API_KEY=nvapi-...
-# optional: SCRAPCHEF_LLM_MODEL=z-ai/glm-5.3  SCRAPCHEF_LLM_BASE_URL=https://integrate.api.nvidia.com/v1  SCRAPCHEF_LLM=off
+SCRAPCHEF_LLM_BASE_URL=https://api.deepseek.com
+SCRAPCHEF_LLM_API_KEY=sk-...
+SCRAPCHEF_LLM_MODEL=deepseek-flash
 ```
+Alternative, GLM 5.3 via NVIDIA: `NVIDIA_API_KEY=nvapi-...` alone, plus `SCRAPCHEF_LLM_EXTRA_BODY={"reasoning_effort":"low"}` (without it GLM spends
+its reply on reasoning and the proposal step times out). `SCRAPCHEF_LLM=off` forces the fallback.
 Tests never call the LLM (`SCRAPCHEF_LLM=off` in `tests/conftest.py`).
 
 ## What is real, estimated, assumed, mocked (cold-water limits)

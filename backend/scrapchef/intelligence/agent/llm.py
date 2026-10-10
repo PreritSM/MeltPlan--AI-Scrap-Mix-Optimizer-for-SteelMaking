@@ -63,7 +63,7 @@ class LLM:
         return f"{self.model} @ {self.base_url}" if self.available else "LLM unavailable (no key or disabled): deterministic fallback"
 
     def chat(self, messages: list[dict], tools: list[dict] | None = None, timeout: float = 30.0,
-             temperature: float = 0.2, max_tokens: int = 2048) -> Reply:
+             temperature: float = 0.2, max_tokens: int = 4096) -> Reply:
         """One chat completion. Raises openai errors (the caller falls back); never returns partial tool calls silently."""
         if self._client is None:
             from openai import OpenAI

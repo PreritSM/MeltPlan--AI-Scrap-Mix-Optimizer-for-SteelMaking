@@ -38,10 +38,15 @@ def fact_numbers(f) -> set[str]:
     return out
 
 
-def faithful(text: str, facts) -> bool:
-    """True if every number in `text` appears in `facts` (a nested structure, or a precomputed set from fact_numbers)."""
+def unsupported(text: str, facts) -> list[str]:
+    """Numbers in `text` that do not appear in `facts` (a nested structure, or a precomputed set from fact_numbers)."""
     allowed = facts if isinstance(facts, set) else fact_numbers(facts)
-    return _numbers(text) <= allowed
+    return sorted(_numbers(text) - allowed)
+
+
+def faithful(text: str, facts) -> bool:
+    """True if every number in `text` appears in `facts`."""
+    return not unsupported(text, facts)
 
 
 SYSTEM = ("You explain steel scrap charge-plan changes to a plant audience. Use ONLY facts in the JSON; do not do arithmetic "

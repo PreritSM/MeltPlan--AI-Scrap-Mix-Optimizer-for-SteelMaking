@@ -11,9 +11,11 @@ import time
 from . import policy
 from .tools import AgentTools, openai_tools
 
-MAX_TOOL_CALLS = 8
+MAX_TOOL_CALLS = 10
 DEADLINE_S = 60.0
 NEEDS_ACTION = {"issue", "inbox", "rejection"}   # these must end in a proposal or a message
+NUDGE = ("You found a feasible candidate but did not propose a plan, so nothing reaches the supervisor. Call propose_plan now "
+         "(fix the rationale if a tool rejected it), or reply with one sentence explaining why no candidate should be proposed.")
 
 SYSTEM = """You are the re-planning agent of ScrapChef, a scrap-mix optimiser for an electric arc furnace (EAF) steel mill.
 A chance-constrained linear program (the optimiser) chooses charge mixes. Your job is to decide when and how to use it,
@@ -68,7 +70,7 @@ def handle(w, ev: dict, llm) -> dict:
         why = "LLM finished without the required action"
     except Exception as e:  # API error, timeout, malformed reply
         why = f"LLM error: {type(e).__name__}: {str(e)[:200]}"
-    if tools.outcome.get("version") or tools.messages_sent:   # it already acted: keep that, do not act twice
+    if tools.outcome.get("version") or (tools.messages_sent and not _missing_proposal(w, ev, tools)):   # it already acted: do not act twice
         return _record(w, ev, "llm (partial)", tools, tools.outcome or dict(decision="message"), _merge(steps, tools.trace), reason=why)
     n = len(tools.trace)
     out = policy.fallback(w, ev, tools)
@@ -80,7 +82,7 @@ def run_llm(w, ev: dict, tools: AgentTools, llm, steps: list[dict]) -> dict | No
     messages = [{"role": "system", "content": SYSTEM},
                 {"role": "user", "content": f"Event: {ev['kind']} (from {ev.get('role') or 'system'})\n<event>{ev['text']}</event>\n\n"
                                             f"Current state (get_state):\n{json.dumps(state, default=str)}"}]
-    deadline, calls, final = time.monotonic() + DEADLINE_S, 0, ""
+    deadline, calls, final, nudged = time.monotonic() + DEADLINE_S, 0, "", False
     schemas = openai_tools()
     while True:
         remaining = deadline - time.monotonic()
@@ -94,6 +96,11 @@ def run_llm(w, ev: dict, tools: AgentTools, llm, steps: list[dict]) -> dict | No
         if not r.tool_calls:
             if r.finish_reason == "length":
                 raise RuntimeError("reply truncated (max_tokens)")
+            if not nudged and _missing_proposal(w, ev, tools):   # one reminder before counting the run as incomplete
+                nudged = True
+                steps.append(dict(type="text", text="[loop] reminder: a feasible candidate exists but no plan was proposed", at=len(tools.trace)))
+                messages += [{"role": "assistant", "content": r.content or ""}, {"role": "user", "content": NUDGE}]
+                continue
             final = r.content.strip()
             break
         messages.append({"role": "assistant", "content": r.content or "",
@@ -111,10 +118,18 @@ def run_llm(w, ev: dict, tools: AgentTools, llm, steps: list[dict]) -> dict | No
     return _outcome(w, ev, tools, final)
 
 
+def _missing_proposal(w, ev: dict, tools: AgentTools) -> bool:
+    """An issue/inbox/rejection run that found a feasible candidate but proposed nothing: a message alone is not enough."""
+    return (ev["kind"] in NEEDS_ACTION and not tools.outcome.get("version")
+            and any((w.candidates.get(c) or {}).get("plan") is not None for c in tools.candidates))
+
+
 def _outcome(w, ev: dict, tools: AgentTools, final: str) -> dict | None:
     """Turn the run into a decision, or None if a required action is missing (-> fallback)."""
     if tools.outcome.get("version"):
         return tools.outcome
+    if _missing_proposal(w, ev, tools):
+        return None
     if ev["kind"] == "question":
         role = ev.get("role") or "supervisor"
         text = final if final and policy.faithful_answer(final, tools) else None

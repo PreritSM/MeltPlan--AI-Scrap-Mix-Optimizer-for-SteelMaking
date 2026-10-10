@@ -10,7 +10,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from scrapchef.data.store import GROUPS, cfg
-from .narrator import faithful, fact_numbers
+from .narrator import fact_numbers, unsupported
 
 Group = Literal["SCRAP_3A", "SCRAP_16A_6A", "SCRAP_25A_3ACH", "IRON_UNITS"]
 Role = Literal["email", "supervisor", "shift_leader", "crane"]
@@ -197,8 +197,10 @@ class AgentTools:
 
     # ------------------------------------------------------------ guards
     def _check_text(self, text: str, crane_text: str = "") -> None:
-        if not faithful(text, self.seen):
-            raise ToolError("text contains numbers that are not in any tool result of this run; use only numbers returned by tools")
+        bad = unsupported(text, self.seen)
+        if bad:
+            raise ToolError(f"text contains numbers that are not in any tool result of this run: {', '.join(bad[:8])}. "
+                            "Remove them or use only numbers returned by tools, then call the tool again")
         if crane_text and re.search(r"\$|cost|price|usd|dollar", crane_text, re.I):
             raise ToolError("the crane role may not see prices or costs; remove them from the crane text")
 

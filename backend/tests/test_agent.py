@@ -59,7 +59,8 @@ def test_guards_reject_bad_arguments_invented_numbers_and_crane_costs(world):
     assert "invalid arguments" in t.call("run_optimizer", '{"exclude_groups": ["GOLD"]}')["error"]
     cand = t.call("run_optimizer", {})
     rat = dict(email="ok", supervisor="Saves 999.99 $/t", shift_leader="ok", crane="ok")
-    assert "numbers" in t.call("propose_plan", dict(candidate_id=cand["candidate_id"], rationale=rat))["error"]
+    err = t.call("propose_plan", dict(candidate_id=cand["candidate_id"], rationale=rat))["error"]
+    assert "numbers" in err and "999.99" in err   # the offending number is named so the model can fix it
     assert "crane" in t.call("send_message", dict(role="crane", text="this costs more"))["error"]
 
 
@@ -110,6 +111,34 @@ def test_llm_loop_explores_proposes_and_offers_an_alternative(world):
     assert rec["path"] == "llm" and rec["decision"] == "replan" and world.current_plan().version == rec["version"]
     assert rec["tools"] == ["get_state", "run_optimizer", "run_optimizer", "propose_plan"]
     assert len(llm.calls) == 4
+
+
+def test_message_without_a_proposal_gets_one_reminder(world):
+    """A run that finds a feasible candidate, messages the crane and stops is reminded once, then proposes."""
+    cap = {"group_caps_t": {"SCRAP_3A": 590.0}}
+
+    def propose(messages):
+        cid = [m for m in messages if m["role"] == "tool"][-2]   # the relaxed run_optimizer result (before send_message)
+        cid = json.loads(cid["content"])["candidate_id"]
+        rat = dict(email="3A capped.", supervisor="Relaxed recipe bounds.", shift_leader="Open heats use less 3A.", crane="Less 3A.")
+        return Reply(tool_calls=[ToolCall("p", "propose_plan", json.dumps(dict(candidate_id=cid, rationale=rat)))])
+
+    llm = FakeLLM([call("run_optimizer", cap), call("run_optimizer", {**cap, "relax_recipe_bounds": True}, 1),
+                   call("send_message", dict(role="crane", text="Less 3A in the open heats."), 2), Reply(content="Told the crane."),
+                   propose, Reply(content="Proposed.")])
+    rec = loop.handle(world, dict(kind="issue", text="Only 590 t of 3A left today.", role="shift_leader", ts=world._ts()), llm)
+    assert rec["path"] == "llm" and rec["decision"] == "replan" and world.current_plan().version == rec["version"]
+    assert any(m["role"] == "user" and "did not propose" in m["content"] for m in llm.calls[4])
+
+
+def test_message_without_a_proposal_falls_back_to_a_plan(world):
+    """If the reminder is ignored, the fallback still publishes a plan: a crane note alone must not end the run."""
+    cap = {"group_caps_t": {"SCRAP_3A": 590.0}}
+    llm = FakeLLM([call("run_optimizer", cap), call("run_optimizer", {**cap, "relax_recipe_bounds": True}, 1),
+                   call("send_message", dict(role="crane", text="Less 3A in the open heats."), 2), Reply(content="Told the crane."),
+                   Reply(content="Still just the message.")])
+    rec = loop.handle(world, dict(kind="issue", text="Only 590 t of 3A left today.", role="shift_leader", ts=world._ts()), llm)
+    assert rec["path"] == "fallback after LLM" and rec["decision"] == "replan" and world.current_plan().version == rec["version"]
 
 
 def test_llm_error_falls_back(world):
