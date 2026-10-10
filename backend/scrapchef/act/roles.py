@@ -17,7 +17,7 @@ def _headroom(h, status_only: bool):
 
 
 def project(plan: PlanVersion, role: str, baseline_per_t: float | None = None, explanation: dict | None = None,
-            progress: dict | None = None) -> dict:
+            progress: dict | None = None, risk_match: dict | None = None) -> dict:
     """Return the role's view of a plan version."""
     assert role in ROLES, role
     progress = progress or {}
@@ -37,7 +37,8 @@ def project(plan: PlanVersion, role: str, baseline_per_t: float | None = None, e
                          for h in plan.heats]
     if role in ("email", "supervisor"):
         base["cost"] = dict(per_t=per_t, baseline_per_t=baseline_per_t,
-                            delta_vs_baseline=(per_t - baseline_per_t) if baseline_per_t is not None else None)
+                            delta_vs_baseline=(per_t - baseline_per_t) if baseline_per_t is not None else None,
+                            risk_match=risk_match)
         if role == "supervisor":
             for hh, h in zip(base["heats"], plan.heats):
                 hh["cost"] = h.cost.model_dump()

@@ -22,7 +22,8 @@ def process_state(w) -> dict:
     plan = w.current_plan()
     last = w.heat_log[-1] if w.heat_log else None
     sel = last["heatid"] if last else None
-    rows = lambda sql, *a: con.execute(sql, list(a)).df().to_dict("records")
+    # NaN is not valid JSON; null DB values must reach the response as None
+    rows = lambda sql, *a: (lambda d: d.astype(object).where(d.notna(), None))(con.execute(sql, list(a)).df()).to_dict("records")
     real_rows = {}
     if sel and not str(sel).startswith("SIM"):
         real_rows = dict(charges=rows("SELECT basket_no, ts, mat_code, mat_name, t FROM heat_charge_basket WHERE heatid=? ORDER BY ts", sel),

@@ -48,7 +48,11 @@ export default function SupervisorView() {
   return (<div>
     {v.drift_alert && <div className="banner">⚠ {v.drift_alert.text}</div>}
     <div className="row"><b>Plan v{plan.version}</b><span className="chip shadow">{plan.status}</span></div>
-    <div><b>{money(plan.cost.per_t)}/t</b> <span className="small">vs baseline {money(plan.cost.baseline_per_t)}/t ({plan.cost.delta_vs_baseline >= 0 ? "+" : ""}{plan.cost.delta_vs_baseline.toFixed(2)})</span></div>
+    <div><b>{money(plan.cost.per_t)}/t</b> <span className="small">{plan.cost.risk_match ? "plan, held to the 95% limits" : `vs historical mix ${money(plan.cost.baseline_per_t)}/t (not risk-matched)`}</span></div>
+    {plan.cost.risk_match && <div className="small">
+      Historical mix {money(plan.cost.risk_match.hist_per_t)}/t, up to {(plan.cost.risk_match.worst_p * 100).toFixed(0)}% chance of breaching {plan.cost.risk_match.worst_el.toUpperCase()}.
+      Optimiser at that same risk: {money(plan.cost.risk_match.matched_per_t)}/t ({plan.cost.risk_match.matched_per_t - plan.cost.risk_match.hist_per_t >= 0 ? "+" : ""}{(plan.cost.risk_match.matched_per_t - plan.cost.risk_match.hist_per_t).toFixed(2)}).
+      Plan vs that: {plan.cost.per_t - plan.cost.risk_match.matched_per_t >= 0 ? "+" : ""}{(plan.cost.per_t - plan.cost.risk_match.matched_per_t).toFixed(2)}/t for the 95% limits.</div>}
     <div className="small">{plan.summary.n_heats} heats · {Object.entries(plan.summary.tonnes_by_group).map(([g, t]: any) => `${g.replace("SCRAP_", "")} ${t}t`).join(" · ")}</div>
     {plan.explanation && <div className="mail"><div className="small">Agent</div>{plan.explanation}</div>}
     <div className="row"><b>Headroom, heat</b>
@@ -60,7 +64,7 @@ export default function SupervisorView() {
     <div className="row">
       <button className="primary" disabled={!canApprove} onClick={() => act("/api/plan/approve")}>Approve</button>
       <button onClick={() => setEdit(true)}>Edit</button>
-      <button className="danger" disabled={plan.status === "RELEASED"} onClick={() => act("/api/plan/reject", { reason: "Supervisor requested a new plan" })}>Reject</button>
+      <button className="danger" disabled={["RELEASED", "LOADING", "DONE"].includes(plan.status)} onClick={() => act("/api/plan/reject", { reason: "Supervisor requested a new plan" })}>Reject</button>
     </div>
     <input type="text" placeholder="Ask the agent (why / cost / risk)…" value={q} onChange={(e) => setQ(e.target.value)} />
     <div className="row"><button disabled={!q} onClick={async () => { const r = await act("/api/chat", { role: "supervisor", text: q }); setAns([...ans, r.answer]); setQ(""); }}>Ask</button></div>

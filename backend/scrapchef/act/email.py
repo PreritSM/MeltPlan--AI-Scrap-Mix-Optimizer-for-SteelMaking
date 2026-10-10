@@ -5,7 +5,20 @@ from scrapchef.contracts.models import PlanVersion
 from scrapchef.data.store import GROUPS
 
 
-def render(plan: PlanVersion, date: str, baseline_per_t: float | None, rationale: str) -> dict:
+def _usd(v: float) -> str:
+    return f"{'+' if v >= 0 else '-'}${abs(v):.2f}"
+
+
+def _cost_lines(per_t: float, baseline_per_t: float | None, rm: dict | None) -> list[str]:
+    if rm:
+        h, m = rm["hist_per_t"], rm["matched_per_t"]
+        return [f"Historical mix (last 30 days, same prices): ${h:.2f}/t, which breaches the limits with up to {rm['worst_p']:.0%} probability ({rm['worst_el'].upper()}).",
+                f"At that same risk the optimiser would cost ${m:.2f}/t ({_usd(m - h)} vs historical).",
+                f"This plan is {_usd(per_t - m)}/t against that same-risk optimum, because it is held to the 95% confidence limits.", ""]
+    return [f"({per_t - baseline_per_t:+.2f} vs historical mix ${baseline_per_t:.2f}/t, not risk-matched)", ""] if baseline_per_t else [""]
+
+
+def render(plan: PlanVersion, date: str, baseline_per_t: float | None, rationale: str, risk_match: dict | None = None) -> dict:
     tot_t = sum(h.target_tap_t for h in plan.heats)
     per_t = sum(h.cost.total for h in plan.heats) / tot_t
     groups: dict[str, float] = {}
@@ -15,7 +28,7 @@ def render(plan: PlanVersion, date: str, baseline_per_t: float | None, rationale
     worst = {el: max(h.predicted[el].p95 / h.predicted[el].limit for h in plan.heats) for el in plan.heats[0].predicted}
     lines = [f"Plan v{plan.version} for {date}: {len(plan.heats)} heats, {tot_t:.0f} t tap.", "",
              "Charge by grade group (t): " + ", ".join(f"{g} {groups[g]:.0f}" for g in GROUPS if g in groups),
-             f"Cost: ${per_t:.2f}/t" + (f" ({per_t - baseline_per_t:+.2f} vs baseline ${baseline_per_t:.2f}/t)" if baseline_per_t else ""), "",
+             f"Cost: ${per_t:.2f}/t"] + _cost_lines(per_t, baseline_per_t, risk_match) + [
              "Worst-heat P95 as % of limit: " + ", ".join(f"{el.upper()} {v:.0%}" for el, v in worst.items()), ""]
     if plan.binding:
         lines += ["Binding constraints:"] + [f" - {c.plain}" for c in plan.binding[:2]] + [""]

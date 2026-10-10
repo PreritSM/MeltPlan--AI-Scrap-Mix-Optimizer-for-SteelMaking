@@ -19,7 +19,7 @@ from scrapchef.intelligence.agent import narrator
 from scrapchef.intelligence.agent.triggers import SurpriseTracker
 from scrapchef.intelligence.estimator.kalman import ElementKF
 from scrapchef.intelligence.estimator.massbalance import build
-from scrapchef.intelligence.optimizer.evaluate import evaluate_mix
+from scrapchef.intelligence.optimizer.evaluate import evaluate_mix, risk_matched_baseline
 from scrapchef.intelligence.optimizer.model import ELS, make_context
 from scrapchef.intelligence.optimizer.plan import build_plan, heat_from_groups
 from scrapchef.read.mock.adapters import AssumedPrices, MockHandling, MockInventory, MockSchedule
@@ -38,6 +38,7 @@ class World:
         with self.lock:
             self.mode = mode or getattr(self, "mode", "SHADOW_REPLAY")
             self.store = PlanStore()
+            self.rm_cache: dict = {}
             self.handling = MockHandling()
             ds = {el: build(el) for el in ELS}
             d = ds["cu"]
@@ -89,15 +90,27 @@ class World:
         vs = [p for p in self.store.versions() if p.plan_id == self.plan_id and p.status not in ("SUPERSEDED", "REJECTED")]
         return vs[-1] if vs else None
 
-    def baseline_per_t(self) -> float:
+    def _baseline_heats(self):
         ht = heat_table()
         ht = ht[(ht.start_ts < self.clock) & (ht.start_ts >= self.clock - timedelta(days=30))]
         if ht.empty:
             ht = heat_table().tail(500)
         X = ht[GROUPS].to_numpy()
         T = X @ self.ctx.yields
-        ok = T > 80
-        return float((((self.ctx.prices + self.ctx.energy_k) @ X[ok].T).sum()) / T[ok].sum())
+        return X[T > 80], T[T > 80]
+
+    def baseline_per_t(self) -> float:
+        """Cost per tonne of steel of the last 30 days' actual mix at the assumed prices. Not risk-matched, see risk_match()."""
+        X, T = self._baseline_heats()
+        return float((((self.ctx.prices + self.ctx.energy_k) @ X.T).sum()) / T.sum())
+
+    def risk_match(self, plan: PlanVersion) -> dict | None:
+        """Historical mix vs optimiser at the historical mix's own predicted risk (cached per plan version)."""
+        key = (plan.plan_id, plan.version)
+        if key not in self.rm_cache:
+            X, _ = self._baseline_heats()
+            self.rm_cache[key] = risk_matched_baseline(self.ctx, X.mean(0), [h.target_tap_t for h in plan.heats], dict(self.ctx.heel_c0))
+        return self.rm_cache[key]
 
     def _set_estimates(self):
         for el in ELS:
@@ -148,7 +161,7 @@ class World:
             return plan
 
     def _send_email(self, plan: PlanVersion, rationale: str):
-        mail = email_mod.render(plan, self.clock.strftime("%Y-%m-%d"), self.baseline_per_t(), rationale)
+        mail = email_mod.render(plan, self.clock.strftime("%Y-%m-%d"), self.baseline_per_t(), rationale, self.risk_match(plan))
         mail.update(ts=self._ts(), read=False)
         self.emails.append(mail)
         self.store.transition(plan, "EMAILED", "agent", self._ts(), "daily email plan")
@@ -367,7 +380,8 @@ class World:
             if role == "email":
                 out["emails"] = list(reversed(self.emails))
             if p is not None:
-                view = project(p, role, self.baseline_per_t(), self.explanation, self.progress)
+                view = project(p, role, self.baseline_per_t(), self.explanation, self.progress,
+                               self.risk_match(p) if role in ("email", "supervisor") else None)
                 if role == "crane":
                     rv = self.released_version
                     rel = next((v for v in self.store.versions() if v.plan_id == p.plan_id and v.version == rv), None) if rv else None

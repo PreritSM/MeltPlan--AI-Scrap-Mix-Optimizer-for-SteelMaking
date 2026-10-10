@@ -12,20 +12,8 @@ import numpy as np
 
 from scrapchef.data.store import GROUPS, ROOT, recipe_bounds
 from .estimator.massbalance import build
-from .optimizer.model import ELS, chol, make_context, predict_heat, solve, z_of
-
-Z_FLOOR = 0.5
-
-
-def z_hist(ctx, x, T, heel):
-    B = T + ctx.heel_t
-    z = {}
-    for el in ELS:
-        base = ctx.heel_t * heel[el] + ctx.est.mu[el] @ x
-        nrm = np.linalg.norm(np.append(chol(ctx.est.cov[el]).T @ x, ctx.est.sigma_eps[el]))
-        z[el] = max((ctx.limits[el] * B - base) / nrm, Z_FLOOR)
-    return z
-
+from .optimizer.evaluate import Z_FLOOR, z_hist
+from .optimizer.model import ELS, make_context, predict_heat, solve, z_of
 
 def run(price_noise: float = 0.0, seed: int = 0, max_heats: int | None = None):
     ctx = make_context(variant="boot_train")
