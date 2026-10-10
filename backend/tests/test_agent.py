@@ -245,3 +245,35 @@ def test_unsafe_live_plan_after_a_lab_result_is_not_left_alone(world):
     rec = loop.handle(world, dict(kind="lab_surprise", text="CU lab result above the limit.", role=None, ts=world._ts()), llm)
     assert any(m["role"] == "user" and "above alpha" in m["content"] for m in llm.calls[-1])
     assert rec["path"] == "fallback after LLM" and rec["decision"] == "replan"
+
+
+def test_llm_rebuilds_a_stale_client_once_on_connection_error(monkeypatch):
+    import httpx
+    import openai
+    from types import SimpleNamespace
+    from scrapchef.intelligence.agent.llm import LLM
+
+    built, calls = [], []
+
+    class FakeClient:
+        def __init__(self, **kw):
+            built.append(kw)
+            self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.create))
+
+        def create(self, **kw):
+            calls.append(kw)
+            if len(calls) == 1:     # the first pooled connection is stale
+                raise openai.APIConnectionError(request=httpx.Request("POST", "http://llm.test"))
+            msg = SimpleNamespace(content="ok", tool_calls=None, model_extra={})
+            return SimpleNamespace(choices=[SimpleNamespace(message=msg, finish_reason="stop")])
+
+    monkeypatch.setattr(openai, "OpenAI", FakeClient)
+    llm = LLM()
+    assert llm.chat([{"role": "user", "content": "hi"}]).content == "ok"
+    assert len(built) == 2 and len(calls) == 2
+
+    calls.clear()
+    monkeypatch.setattr(FakeClient, "create", lambda self, **kw: (_ for _ in ()).throw(
+        openai.APIConnectionError(request=httpx.Request("POST", "http://llm.test"))))
+    with pytest.raises(openai.APIConnectionError):   # a second failure in a row is raised for the caller's fallback
+        llm.chat([{"role": "user", "content": "hi"}])

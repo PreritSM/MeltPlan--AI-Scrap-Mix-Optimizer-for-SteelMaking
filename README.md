@@ -12,7 +12,14 @@ Switch the mode selector to *Simulated drift scenario*, then ▶ to watch the ag
 The agent (`backend/scrapchef/intelligence/agent/`) is a tool-use loop: the LP decides, the LLM chooses optimiser settings, explores options and explains.
 It wakes on lab results (surprise or above the limit), drift, free-text issues, rejections, questions and inbound emails; the 06:00 plan stays deterministic.
 Tools: `get_state`, `run_optimizer`, `evaluate_mix`, `compare_plans`, `propose_plan` (needs supervisor approval), `send_message`.
-Guards: numbers in any text must come from tool results, no prices to the crane, anti-churn, 10 tool calls / 60 s per run; a feasible candidate that was never proposed gets one reminder, then the fallback publishes.
+Guards (in code, not the prompt):
+- Numbers in any text must come from tool results (as given or rounded); a question answer that fails a check gets one rewrite naming the problem.
+- No prices or cost figures to the crane or the shift leader (currency symbols and every cost/price/saving number from the run are blocked); the shift leader may be told that costs go to the supervisor.
+- The proposal is the least-relaxed feasible candidate: one that changes the live spec class or raises α can only be an alternative while a live-settings candidate is feasible. Same-cost alternatives (within $0.05/t) are dropped.
+- Anti-churn; 10 tool calls / 60 s per run; a feasible candidate that was never proposed gets one reminder, then the fallback publishes.
+- After a lab result or drift, a live plan above α with no feasible candidate gets one reminder ("an unsafe plan is not no change"), then the fallback runs.
+- The sim clock waits for the agent: Step heat / ▶ pause while a run is pending, so a proposal never arrives for heats that have already tapped.
+The LLM client rebuilds its connection once on a connection error (a pooled connection goes stale while the demo sits idle).
 Without a key, or on any LLM failure, a deterministic fallback (`policy.py`) runs the same tools. The Process View agent card shows which path ran.
 
 LLM: any OpenAI-compatible endpoint, set in `backend/.env` (gitignored). Demo default, DeepSeek flash (supplier email: 3/3 runs on the LLM path, 25–39 s):
@@ -50,7 +57,23 @@ Tests never call the LLM (`SCRAPCHEF_LLM=off` in `tests/conftest.py`).
   (bootstrap SDs are optimistic), but closed-loop attribution to minor groups stays weak because every planned heat uses nearly the same mix; 3A, the dominant group, is identifiable.
 - The supplier-email scenario caps 3A below the recipe floor, so the plain re-plan is infeasible and the agent explores. "Relax recipe bounds" only drops minimum shares and allows
   more iron units; minor-scrap maximums stay at demonstrated practice. Dropping the 3A floor is itself cheaper under the model (16A_6A displaces 3A and less iron is needed),
-  so a relaxed candidate reports `delta_breakdown`: the availability limit (+$0.22/t in the scripted email) vs dropping the recipe floors (-$7.63/t). The explanation states both,
-  so a forced change is never shown as a plain saving. The recipe floor is taken from history; whether it is a real plant rule is a question for the mill.
+  so a relaxed candidate reports `delta_breakdown`: the availability limit vs dropping the recipe floors. In the scripted email this is $0.00/t vs −$7.78/t (v2 at $488.76/t):
+  once the 3A floor is dropped the 560 t cap no longer binds, so the whole change comes from the floor. The explanation states both, so a forced change is never shown as a plain saving. The recipe floor is taken from history; whether it is a real plant rule is a question for the mill.
+- Heel chemistry for later heats is the previous heat's planned P50, iterated until it settles (≤ 6 passes, 1e-4 wt%). Two fixed passes left heats 3–8 at ~5.2% Cu risk, above α.
+  The first replay plan (2018-06-02) costs $496.54/t ($492.42/t for the historical mix; the same-risk optimum is $489.88/t, so the 95% limits cost $6.65/t).
+- Control Suite edits are checked for process limits as well as chemistry: a charge above the 140 t capacity cannot be saved, and a tap more than 2 t (`edit_tap_tol_t`, ASSUMED) off target is flagged.
+  A hand edit over a chemistry limit is only warned about; it can still be saved and approved.
 - The replay starts on the first day with enough heats (2018-06-02 06:00, an 8-heat plan), because the removed heats leave gaps in June 2018.
 - Human approval is required at every step; the LP decides and the LLM only narrates.
+- A plan is DONE when all its heats have tapped; ▶ then stops, and **Plan 06:00** moves on to the next day (the 06:00 plan is not automatic during ▶).
+
+### Known gaps (end-to-end test, 2026-10-10)
+- LLM wording is checked for numbers, not meaning. Seen live: 25A_3ACH called "higher-copper" (it is the low-Cu group); "148.5 t of 3A into 16A/6A" (16A/6A rose 80.2 t);
+  the crane told "no pause needed" while the shift leader was told to await approval.
+- DeepSeek sometimes leaves its reasoning in the reply (one rejected answer contained "Wait — need to check…"), and once sent truncated tool-call JSON (repaired on retry).
+- In lab/drift runs a crane message can still go out without a plan following (the missing-proposal rule covers issue, inbox and rejection only); the sim-clock pause makes this unlikely.
+- `prices.yaml` prices SCRAP_3A and SCRAP_25A_3ACH the same (430 $/t), so low-Cu scrap has no premium; that is why the plan uses ~32% 25A_3ACH.
+- The binding constraints shown for a hand-edited version are its parent version's shadow prices.
+- UI stubs: the email mentions "[Reply]" but has no Reply button; Reject sends a fixed reason (no reason box); "Basket complete" only switches the crane tab.
+- Any second process that builds a `World` drops the tables in `data/app.sqlite` (the live API's plans). Scratch scripts must point `scrapchef.act.plans.ROOT` at a temp dir.
+- cvxpy reports "Solution may be inaccurate" on later heel passes of the exclude-3ACh option at α = 0.10; `optimal_inaccurate` is accepted (matches neighbouring passes to ~0.003%).

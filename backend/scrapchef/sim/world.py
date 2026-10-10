@@ -411,7 +411,7 @@ class World:
     def churn_blocks(self, summary: dict) -> str | None:
         """Anti-churn (A13): refuse a re-plan that saves less than the threshold while the live plan is still within risk."""
         cur = self.open_eval() or {}
-        # 0.005 tolerance: the plan's 2-pass heel fixed point leaves the stored mix a hair over alpha (e.g. 0.052)
+        # 0.005 tolerance: solver and heel fixed-point rounding can leave the stored mix a hair over alpha
         risk_ok = all(v <= self.alpha + 0.005 for v in (cur.get("worst_p_exceed") or {}).values())
         d = summary.get("delta_per_t")
         if d is not None and abs(d) < self.mill["anti_churn_usd_per_t"] and risk_ok:
