@@ -89,5 +89,9 @@ def test_risk_matched_baseline_is_not_dearer_than_historical_and_is_in_email():
     rm = w.risk_match(plan)
     assert rm and rm["matched_per_t"] <= rm["hist_per_t"] + 1e-6   # the historical mix is feasible at its own risk
     assert 0 <= rm["worst_p"] <= 1 and rm["worst_el"] in ("cu", "sn", "ni", "mo")
-    assert "same risk" in w.emails[-1]["body"]
+    body = w.emails[-1]["body"]
+    assert "same risk" in body
+    assert "Net effect against the historical mix" in body
+    assert all(body.count(c.plain) == 1 for c in plan.binding[:2])   # the email lists the top two, each once
+    assert all(body.count(c.plain) <= 1 for c in plan.binding)
     assert w.phone("supervisor")["plan"]["cost"]["risk_match"]["matched_per_t"] == rm["matched_per_t"]

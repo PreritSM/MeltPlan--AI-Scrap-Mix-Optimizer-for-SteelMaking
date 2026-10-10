@@ -132,11 +132,15 @@ class World:
         return float((((self.ctx.prices + self.ctx.energy_k) @ X.T).sum()) / T.sum())
 
     def risk_match(self, plan: PlanVersion) -> dict | None:
-        """Historical mix vs optimiser at the historical mix's own predicted risk (cached per plan version)."""
+        """Historical mix vs optimiser at the historical mix's own predicted risk (cached per plan version).
+        plan_worst_p: the plan's own risk on the same element, averaged over heats the same way as worst_p."""
         key = (plan.plan_id, plan.version)
         if key not in self.rm_cache:
             X, _ = self._baseline_heats()
-            self.rm_cache[key] = risk_matched_baseline(self.ctx, X.mean(0), [h.target_tap_t for h in plan.heats], dict(self.ctx.heel_c0))
+            rm = risk_matched_baseline(self.ctx, X.mean(0), [h.target_tap_t for h in plan.heats], dict(self.ctx.heel_c0))
+            if rm:
+                rm["plan_worst_p"] = float(np.mean([h.predicted[rm["worst_el"]].p_exceed for h in plan.heats]))
+            self.rm_cache[key] = rm
         return self.rm_cache[key]
 
     def _set_estimates(self):
@@ -185,8 +189,7 @@ class World:
             self.store.save(plan, "agent", self._ts(), trigger)
             facts = dict(decision="new_plan", version=version, trigger_text="Daily 06:00 plan.", n_heats=len(plan.heats), moves=[],
                          cost_delta_per_t=0.0, new_per_t=sum(h.cost.total for h in plan.heats) / sum(h.steel_t for h in plan.heats), reason="", binding=(plan.binding[0].plain if plan.binding else ""))
-            rationale = ("Lowest-cost mix meeting every element limit with 95% confidence, within the mill's demonstrated recipe range."
-                         + (f" {plan.binding[0].plain}." if plan.binding else ""))
+            rationale = "Lowest-cost mix meeting every element limit with 95% confidence, within the mill's demonstrated recipe range."
             self._send_email(plan, rationale)
             self.decisions.append(dict(ts=self._ts(), trigger=trigger, tools=["get_state", "run_optimizer", "publish_plan"], decision="plan",
                                        version=version, facts=facts, explanation={"email": rationale}, narrator={"email": "template"}))

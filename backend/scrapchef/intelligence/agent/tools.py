@@ -236,7 +236,7 @@ def _vs_history(w, plan) -> dict | None:
     per_t = sum(h.cost.total for h in plan.heats) / sum(h.steel_t for h in plan.heats)
     h, m = rm["hist_per_t"], rm["matched_per_t"]
     return dict(plan_cost_per_t=round(per_t, 2), historical_mix_cost_per_t=round(h, 2),
-                historical_mix_worst_breach_probability=round(rm["worst_p"], 2), historical_mix_worst_element=rm["worst_el"],
+                historical_mix_worst_breach_probability=round(rm["worst_p"], 2), historical_mix_worst_element=rm["worst_el"], plan_worst_breach_probability=round(rm["plan_worst_p"], 2),
                 optimiser_at_historical_risk_cost_per_t=round(m, 2), saving_at_same_risk_per_t=round(h - m, 2),
                 plan_minus_same_risk_optimum_per_t=round(per_t - m, 2),
                 note="the plan costs more than the same-risk optimum because it is held to the 95% limits")

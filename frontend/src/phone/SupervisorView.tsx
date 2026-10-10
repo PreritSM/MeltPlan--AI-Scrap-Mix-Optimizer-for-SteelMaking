@@ -7,6 +7,15 @@ import { sym } from "../format";
 
 const money = (v: number) => `$${v.toFixed(2)}`;
 
+/** Same wording as the email's bottom line (act/email.py _bottom_line). */
+function bottomLine(perT: number, rm: any) {
+  const net = perT - rm.hist_per_t, el = sym(rm.worst_el);
+  const a = Math.round(rm.worst_p * 100), b = Math.round(rm.plan_worst_p * 100);
+  const pay = net > 0 ? "You pay a little more per tonne" : "You save money per tonne";
+  const risk = b < a ? `cut the ${el} breach risk from ${a}% to ${b}%` : `the ${el} breach risk goes from ${a}% to ${b}%`;
+  return `Net effect against the historical mix: about ${net >= 0 ? "+" : "-"}${money(Math.abs(net))}/t. ${pay} and ${risk}.`;
+}
+
 function ControlSuite({ plan, groups, onClose }: { plan: any; groups: string[]; onClose: () => void }) {
   const { act } = useSim();
   const [slot, setSlot] = useState(1);
@@ -54,7 +63,8 @@ export default function SupervisorView() {
     {plan.cost.risk_match && <div className="small">
       Historical mix {money(plan.cost.risk_match.hist_per_t)}/t, up to {(plan.cost.risk_match.worst_p * 100).toFixed(0)}% chance of breaching {sym(plan.cost.risk_match.worst_el)}.
       Optimiser at that same risk: {money(plan.cost.risk_match.matched_per_t)}/t ({plan.cost.risk_match.matched_per_t - plan.cost.risk_match.hist_per_t >= 0 ? "+" : ""}{(plan.cost.risk_match.matched_per_t - plan.cost.risk_match.hist_per_t).toFixed(2)}).
-      Plan vs that: {plan.cost.per_t - plan.cost.risk_match.matched_per_t >= 0 ? "+" : ""}{(plan.cost.per_t - plan.cost.risk_match.matched_per_t).toFixed(2)}/t for the 95% limits.</div>}
+      Plan vs that: {plan.cost.per_t - plan.cost.risk_match.matched_per_t >= 0 ? "+" : ""}{(plan.cost.per_t - plan.cost.risk_match.matched_per_t).toFixed(2)}/t for the 95% limits.
+      <div>{bottomLine(plan.cost.per_t, plan.cost.risk_match)}</div></div>}
     <div className="small">{plan.summary.n_heats} heats · {Object.entries(plan.summary.tonnes_by_group).map(([g, t]: any) => `${g.replace("SCRAP_", "")} ${t}t`).join(" · ")}</div>
     {plan.explanation && <div className="mail msg"><div className="small">Agent</div>{plan.explanation}</div>}
     <AgentMessages items={v.messages} />
