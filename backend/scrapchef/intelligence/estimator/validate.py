@@ -7,6 +7,7 @@ import sys
 
 import numpy as np
 
+from scrapchef.data.features import split_heats
 from scrapchef.data.store import GROUPS, ROOT, priors
 from .bayes import fit_bayes, fit_nnls
 from .bootstrap import block_bootstrap
@@ -24,7 +25,7 @@ def _mae(a, b):
 def run_element(el: str) -> dict:
     d = build(el)
     n = len(d.y)
-    i1, i2 = int(0.70 * n), int(0.85 * n)
+    i1, i2 = split_heats(d.heats)
     tr, va, te = slice(0, i1), slice(i1, i2), slice(i2, n)
     mu0, sd0 = priors(el)
     mu0, sd0 = np.array(mu0), np.array(sd0)

@@ -14,14 +14,14 @@ class ElementKF:
         self.Q = q_frac * np.diag(np.maximum(np.diag(cov), 1e-8))
 
     def update(self, x: np.ndarray, y: float) -> float:
-        """x: tonnes per group, y: c*B - H*c_prev (wt% t). Returns the normalised innovation."""
+        """x: tonnes per group, y: c*B - H*c_prev (wt% t). Returns the normalised prediction error (z-score)."""
         self.P = self.P + self.Q
         S = float(x @ self.P @ x + self.R)
         K = self.P @ x / S
-        innov = y - float(x @ self.e)
-        self.e = np.maximum(self.e + K * innov, 0.0)
+        prediction_error = y - float(x @ self.e)
+        self.e = np.maximum(self.e + K * prediction_error, 0.0)
         self.P = self.P - np.outer(K, x @ self.P)
-        return innov / np.sqrt(S)
+        return prediction_error / np.sqrt(S)
 
     def drift(self, k: float = 2.0) -> list[int]:
         """Groups whose online estimate left the batch estimate by > k sd_eff (sd floored: bootstrap sd is optimistic)."""

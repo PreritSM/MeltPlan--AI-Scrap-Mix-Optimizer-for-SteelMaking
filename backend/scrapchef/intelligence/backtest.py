@@ -10,6 +10,7 @@ import sys
 
 import numpy as np
 
+from scrapchef.data.features import split_heats
 from scrapchef.data.store import GROUPS, ROOT, recipe_bounds
 from .estimator.massbalance import build
 from .optimizer.evaluate import Z_FLOOR, z_hist
@@ -23,7 +24,7 @@ def run(price_noise: float = 0.0, seed: int = 0, max_heats: int | None = None):
     ds = {el: build(el) for el in ELS}
     d = ds["cu"]
     n = len(d.y)
-    test = range(int(0.85 * n), n)
+    test = range(split_heats(d.heats)[1], n)
     bounds0 = recipe_bounds()
     rows = []
     for k, i in enumerate(test):

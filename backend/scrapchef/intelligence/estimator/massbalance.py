@@ -9,6 +9,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from scrapchef.data.features import heel_chem
 from scrapchef.data.store import GROUPS, cfg, heat_table
 
 ELEMENTS = ["cu", "sn", "ni", "mo"]
@@ -34,11 +35,7 @@ def build(element: str, yield_: float | None = None) -> Design:
         yield_ = mill["rated_tap_t"] / ht.loc[ht.in_cohort, "total_charge_t"].median()
     ht["W"] = yield_ * ht.total_charge_t
     ht["B"] = ht.W + H
-    prev = ht[element].shift(1)
-    same_chain = ~ht.chain_start
-    trailing = ht[element].expanding().median().shift(1).bfill()
-    ht["c_prev"] = np.where(same_chain & prev.notna(), prev, trailing)
-    ht["prev_measured"] = (same_chain & prev.notna()).to_numpy()
+    ht["c_prev"], ht["prev_measured"] = heel_chem(ht, element)
     d = ht[ht.in_cohort & ht[element].notna()].reset_index(drop=True)
     X = d[GROUPS].to_numpy(float)
     y = d[element].to_numpy(float) * d.B.to_numpy() - H * d.c_prev.to_numpy()

@@ -14,6 +14,7 @@ from scrapchef.act import email as email_mod
 from scrapchef.act.plans import PlanStore
 from scrapchef.act.roles import project
 from scrapchef.contracts.models import PlanVersion
+from scrapchef.data.features import split_heats
 from scrapchef.data.store import GROUPS, cfg, heat_table
 from scrapchef.intelligence.agent import narrator
 from scrapchef.intelligence.agent.triggers import SurpriseTracker
@@ -42,10 +43,10 @@ class World:
             self.handling = MockHandling()
             ds = {el: build(el) for el in ELS}
             d = ds["cu"]
-            n = len(d.y)
-            self.replay = d.heats.iloc[int(0.85 * n):].reset_index(drop=True)      # held-out heats (REAL)
-            self.replay_c_prev = {el: ds[el].c_prev[int(0.85 * n):] for el in ELS}
-            self.B_all = d.B[int(0.85 * n):]
+            i0 = split_heats(d.heats)[1]
+            self.replay = d.heats.iloc[i0:].reset_index(drop=True)      # held-out heats (REAL)
+            self.replay_c_prev = {el: ds[el].c_prev[i0:] for el in ELS}
+            self.B_all = d.B[i0:]
             # start on the first day whose next-24h window holds enough heats (removed heats leave gaps in the replay)
             ts, min_heats = self.replay.start_ts, 8
             self.clock = next((t0 for t0 in (d + timedelta(hours=6) for d in ts.dt.normalize().unique())
