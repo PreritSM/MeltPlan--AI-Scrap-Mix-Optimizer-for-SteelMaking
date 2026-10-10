@@ -10,6 +10,8 @@ export default function CraneView() {
   const [done, setDone] = useState<Record<string, boolean>>({});
   const banner = plan?.banner;
   if (!plan?.loading?.length) return <div>{banner && <div className="banner">{banner.text}</div>}<AgentMessages items={v?.messages} /><div className="small">No released plan. Waiting for the shift leader.</div></div>;
+  if (plan.loading.every((h: any) => h.progress === "tapped"))
+    return <div>{banner && <div className="banner">{banner.text}</div>}<AgentMessages items={v?.messages} /><div className="small">All heats of this plan are loaded and tapped. Waiting for the next plan.</div></div>;
   const open = plan.loading.find((h: any) => h.slot === (slot ?? plan.loading.find((x: any) => x.progress !== "tapped")?.slot ?? 1)) ?? plan.loading[0];
   const bas = open.baskets.find((b: any) => b.basket_no === tab) ?? open.baskets[0];
   return (<div>

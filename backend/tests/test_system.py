@@ -31,6 +31,7 @@ def test_shift_leader_sees_status_only_headroom(sim):
     v = project(sim.current_plan(), "shift_leader")
     assert all(isinstance(x, str) for x in v["heats"][0]["headroom"].values())
     assert "cost" not in _flat(v["heats"][0]) and "binding" not in v
+    assert all(x == "OK" for h in v["heats"] for x in h["headroom"].values())   # an optimal plan binds at alpha: not "AT RISK"
 
 
 def test_only_supervisor_sees_shadow_prices(sim):
@@ -49,6 +50,9 @@ def test_narrator_faithfulness():
                  cost_delta_per_t=0.2, new_per_t=480.0, reason="")
     assert narrator.faithful("Moved 5.0 t, cost +0.2 over 3 heats.", facts)
     assert not narrator.faithful("Saved 17 dollars.", facts)
+    est = dict(cu=0.1856, p=0.052)   # a tool value may be quoted exactly as given, not only rounded to 2 decimals
+    assert narrator.faithful("The group carries 0.1856% Cu (0.19%), exceedance 0.052 or 5.2%.", est)
+    assert not narrator.faithful("The group carries 0.1857% Cu.", est)
 
 
 def test_scenario_drift_triggers_replan_and_shifts_to_iron_units():

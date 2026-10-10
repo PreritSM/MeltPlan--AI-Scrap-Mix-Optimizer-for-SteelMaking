@@ -65,15 +65,22 @@ class LLM:
     def chat(self, messages: list[dict], tools: list[dict] | None = None, timeout: float = 30.0,
              temperature: float = 0.2, max_tokens: int = 4096) -> Reply:
         """One chat completion. Raises openai errors (the caller falls back); never returns partial tool calls silently."""
-        if self._client is None:
-            from openai import OpenAI
-            self._client = OpenAI(base_url=self.base_url, api_key=self.api_key, max_retries=1)
+        from openai import APIConnectionError, OpenAI
         kw = dict(model=self.model, messages=messages, temperature=temperature, max_tokens=max_tokens, timeout=timeout)
         if tools:
             kw.update(tools=tools, tool_choice="auto")
         if self.extra_body:
             kw["extra_body"] = self.extra_body
-        r = self._client.chat.completions.create(**kw)
+        for attempt in (1, 2):
+            if self._client is None:
+                self._client = OpenAI(base_url=self.base_url, api_key=self.api_key, max_retries=1)
+            try:
+                r = self._client.chat.completions.create(**kw)
+                break
+            except APIConnectionError:   # a pooled connection went stale while the demo sat idle: rebuild the client once
+                self._client = None
+                if attempt == 2:
+                    raise
         ch = r.choices[0]
         m = ch.message
         extra = m.model_extra or {}

@@ -39,7 +39,8 @@ def process_state(w) -> dict:
         mock("inventory", "Inventory"), mock("prices", "Prices & deliveries"), mock("schedule", "Production schedule"),
         card("handling", "read", "Camera handling events", "MOCK", "fresh" if w.handling.log else "idle", dict(events=len(w.handling.log)), {},
              dict(events=[e.model_dump() for e in w.handling.log[-20:]])),
-        card("inbox", "read", "Email / chat inbox", "MOCK", "fresh" if w.chat else "idle", dict(messages=len(w.chat)), {}, dict(chat=w.chat[-10:])),
+        card("inbox", "read", "Email / chat inbox", "MOCK", "fresh" if w.inbox else "idle", dict(messages=len(w.inbox)), {},
+             dict(inbound=w.inbox[-10:], replies=w.chat[-10:])),
     ]
     gm = [dict(code=r[0], group=r[1]) for r in con.execute("SELECT mat_code, grade_group FROM grade_map ORDER BY 2, 1").fetchall()]
     data = [

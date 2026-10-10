@@ -54,8 +54,10 @@ def risk_matched_baseline(ctx: Context, x_mean: np.ndarray, taps: list[float], h
     return dict(hist_per_t=hist / steel, matched_per_t=matched / steel, p_exceed=p_exceed, worst_el=worst, worst_p=p_exceed[worst])
 
 
-def evaluate_mix(ctx: Context, group_t: dict[str, float], tap_t: float, heel_c: dict[str, float], alpha: float = 0.05) -> dict:
-    """Chemistry and cost per tonne use the tap this mix actually makes; tap_t (the target) is only reported for comparison."""
+def evaluate_mix(ctx: Context, group_t: dict[str, float], tap_t: float, heel_c: dict[str, float], alpha: float = 0.05,
+                 tap_tol_t: float | None = None, capacity_t: float | None = None) -> dict:
+    """Chemistry and cost per tonne use the tap this mix actually makes; tap_t (the target) is only reported for comparison.
+    process_violations: the charge does not fit the furnace, or makes a tap off target by more than tap_tol_t."""
     x = np.array([group_t.get(g, 0.0) for g in GROUPS], float)
     tap_actual = tap_of(ctx, x)
     pred = predict_heat(ctx, x, None, heel_c)
@@ -64,4 +66,14 @@ def evaluate_mix(ctx: Context, group_t: dict[str, float], tap_t: float, heel_c: 
     return dict(predicted=pred, cost=dict(material=material, energy=energy, total=material + energy,
                                           per_t=(material + energy) / tap_actual if tap_actual > 0 else 0.0),
                 tap_actual_t=tap_actual, target_tap_t=tap_t,
-                violations=[e for e, p in pred.items() if p["p_exceed"] > alpha + P_TOL])
+                violations=[e for e, p in pred.items() if p["p_exceed"] > alpha + P_TOL],
+                process_violations=_process_violations(float(x.sum()), tap_actual, tap_t, tap_tol_t, capacity_t))
+
+
+def _process_violations(charge: float, tap: float, target: float, tol: float | None, cap: float | None) -> list[str]:
+    out = []
+    if cap is not None and charge > cap:
+        out.append(f"charge {charge:.1f} t is above the {cap:.0f} t furnace capacity")
+    if tol is not None and abs(tap - target) > tol:
+        out.append(f"tap {tap:.1f} t is off the {target:.0f} t target by more than {tol:g} t")
+    return out

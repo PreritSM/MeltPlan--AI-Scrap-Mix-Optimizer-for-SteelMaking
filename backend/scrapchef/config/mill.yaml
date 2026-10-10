@@ -3,6 +3,7 @@ rated_tap_t: 125.0          # nameplate (dataset description)
 target_tap_t: 117.0         # planned tap per heat: median of yields . charge over the cohort (116.7 t), D19
 tap_tol_t: 0.05             # optimiser tap window; was 1.0, which let every plan make ~1 t less steel (Tap_tol_error.md)
 capacity_t: 140.0
+edit_tap_tol_t: 2.0         # Control Suite: a hand-edited heat may miss the target tap by this much before it is flagged (ASSUMED)
 heel_t: 17.5
 heel_chain_break_h: 24
 plan_horizon_h: 24

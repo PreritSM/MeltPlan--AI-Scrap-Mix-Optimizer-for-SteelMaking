@@ -87,6 +87,7 @@ class World:
             self.decisions: list[dict] = []
             self.emails: list[dict] = []
             self.chat: list[dict] = []
+            self.inbox: list[dict] = []   # inbound free text the agent reads (READ layer): emails, issues, questions, rejections
             self.heat_log: list[dict] = []
             self.explanation: dict = {}
             self.drift_alert: dict | None = None
@@ -222,7 +223,8 @@ class World:
         slot = self.sim_step + 1
         if slot > len(plan.heats):
             return None
-        h = plan.heats[slot - 1]
+        rel = next((v for v in self.store.versions() if v.plan_id == plan.plan_id and v.version == self.released_version), None)
+        h = (rel or plan).heats[slot - 1]   # the furnace is charged from the crane's (released) list, not a version awaiting approval
         x = np.array([h.group_t.get(g, 0.0) for g in GROUPS])
         B = h.steel_t + self.mill["heel_t"]
         meas = {}
@@ -268,8 +270,17 @@ class World:
             self.progress[slot] = "tapped"
         return rec
 
+    def plan_finished(self) -> bool:
+        """Every heat of the live plan is tapped: the next step belongs to the next 06:00 plan."""
+        p = self.current_plan()
+        return bool(p) and all(self.progress.get(h.slot) == "tapped" for h in p.heats)
+
     def _after_heat(self, rec: dict):
         self._emit("heat_tapped", {"heatid": rec["heatid"], "slot": rec["slot"], "elements": rec["elements"]}, ["process", "supervisor", "shift_leader"])
+        p = self.current_plan()
+        if p and p.status in ("RELEASED", "LOADING") and self.plan_finished():
+            self.store.transition(p, "DONE", "system", self._ts(), "all heats tapped")
+            self._emit("plan_done", {"version": p.version}, ["process", "supervisor", "shift_leader", "crane"])
         if rec["drift"]:
             self.drift_alert = dict(ts=rec["ts"], groups=rec["drift"],
                                     text="Composition drift: " + "; ".join(f"{e.upper()} in {', '.join(g)}" for e, g in rec["drift"].items()))
@@ -430,10 +441,14 @@ class World:
                 self.store.transition(plan, "SUPERSEDED", actor, self._ts(), f"re-plan: {trigger_text}")
             self.store.save(new, actor, self._ts(), trigger_text)
             self.caps, self.spec_class, self.alpha = dict(cand["caps"]), cand["spec_class"], cand["alpha"]
+            self.ctx.limits = cfg("specs")["classes"][self.spec_class]   # Control Suite, open-heat risk and the history line follow the live spec
             self.explanation = dict(rationale)
-            self.alternatives[(new.plan_id, new.version)] = [
-                dict(self.candidates[a]["summary"], label=chr(66 + k)) for k, a in enumerate(a for a in (alternatives or [])
-                                                                              if a != cid and self.candidates.get(a, {}).get("plan") is not None)][:2]
+            kept, costs = [], [cand["summary"]["cost_per_t"]]
+            for a in alternatives or []:   # an option at the same cost is not a real alternative (same rule as the fallback)
+                c = self.candidates.get(a, {})
+                if a != cid and c.get("plan") is not None and all(abs(c["summary"]["cost_per_t"] - x) > 0.05 for x in costs):
+                    kept.append(a); costs.append(c["summary"]["cost_per_t"])
+            self.alternatives[(new.plan_id, new.version)] = [dict(self.candidates[a]["summary"], label=chr(66 + k)) for k, a in enumerate(kept[:2])]
             self._send_email(new, rationale.get("email") or rationale.get("supervisor", ""))
             self.pending_banner = dict(version=new.version, text=rationale.get("crane", "Plan changed: check the new basket list."), ts=self._ts())
             self.tracker = SurpriseTracker()  # cooldown: the estimates just changed, so start a fresh surprise history
@@ -463,6 +478,8 @@ class World:
     def dispatch(self, kind: str, text: str, role: str | None = None):
         """Wake the agent. Async in the API (UI stays responsive); sync in tests. Lab/drift events coalesce while a run is pending."""
         ev = dict(kind=kind, text=text, role=role, ts=self._ts())
+        if kind in ("inbox", "issue", "question", "rejection"):
+            self.inbox.append(ev)
         if kind in ("lab_surprise", "drift") and self.agent_pending:
             return None
         if self.agent_async:
@@ -532,6 +549,8 @@ class World:
     def edit(self, slot: int, group_t: dict[str, float], actor="supervisor") -> PlanVersion:
         with self.lock:
             p = self.current_plan()
+            if sum(group_t.values()) > self.mill["capacity_t"]:
+                raise ValueError(f"charge {sum(group_t.values()):.1f} t is above the {self.mill['capacity_t']:.0f} t furnace capacity")
             self.ctx.heel_c0 = dict(self.plan_heel0)
             self._set_estimates()
             h = p.heats[slot - 1]
@@ -554,7 +573,7 @@ class World:
             self._set_estimates()
             h = p.heats[slot - 1]
             heel = dict(self.plan_heel0) if slot == 1 else {el: p.heats[slot - 2].predicted[el].mean for el in ELS}
-            ev = evaluate_mix(self.ctx, group_t, h.target_tap_t, heel)
+            ev = evaluate_mix(self.ctx, group_t, h.target_tap_t, heel, tap_tol_t=self.mill["edit_tap_tol_t"], capacity_t=self.mill["capacity_t"])
             ev["delta_cost_per_t"] = ev["cost"]["per_t"] - h.cost.per_t
             return ev
 

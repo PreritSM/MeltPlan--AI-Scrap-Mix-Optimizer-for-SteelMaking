@@ -62,6 +62,11 @@ def test_guards_reject_bad_arguments_invented_numbers_and_crane_costs(world):
     err = t.call("propose_plan", dict(candidate_id=cand["candidate_id"], rationale=rat))["error"]
     assert "numbers" in err and "999.99" in err   # the offending number is named so the model can fix it
     assert "crane" in t.call("send_message", dict(role="crane", text="this costs more"))["error"]
+    # the shift leader may not see costs either, also without a cost word (live run: "runs at 496.54 per tonne")
+    per_t = str(cand["cost_per_t"])
+    assert "cost figures" in t.call("send_message", dict(role="shift_leader", text=f"The plan runs at {per_t} overall."))["error"]
+    assert t.call("send_message", dict(role="supervisor", text=f"The plan runs at {per_t} $/t."))["ok"]
+    assert t.call("send_message", dict(role="shift_leader", text="Cost figures go to the supervisor, not to this role."))["ok"]
 
 
 def test_anti_churn_blocks_a_pointless_replan(world):
@@ -164,8 +169,26 @@ def test_tool_budget_is_enforced(world):
 
 def test_question_answer_must_use_tool_numbers(world):
     rec = loop.handle(world, dict(kind="question", text="What is the plan cost?", role="supervisor", ts=world._ts()),
-                      FakeLLM([Reply(content="It costs 12345.67 $/t.")]))
+                      FakeLLM([Reply(content="It costs 12345.67 $/t."), Reply(content="Still 12345.67 $/t.")]))
     assert rec["path"] == "fallback after LLM" and world.chat[-1]["to"] == "supervisor"
+    assert "12345.67" in rec["path_reason"]   # the reason names the rejected number
+
+
+def test_question_answer_gets_one_rewrite_naming_the_bad_number(world):
+    def fixed(messages):
+        cost = json.loads(messages[1]["content"].split("(get_state):\n", 1)[1])["vs_history"]["plan_cost_per_t"]
+        return Reply(content=f"The plan costs {cost} $/t.")
+    llm = FakeLLM([Reply(content="It costs 12345.67 $/t."), fixed])
+    rec = loop.handle(world, dict(kind="question", text="What is the plan cost?", role="supervisor", ts=world._ts()), llm)
+    assert rec["path"] == "llm" and rec["decision"] == "answer"
+    assert "12345.67" in llm.calls[1][-1]["content"] and world.chat[-1]["text"].startswith("The plan costs")
+
+
+def test_fallback_answer_combines_why_cost_and_risk(world):
+    from scrapchef.intelligence.agent import chat
+    a = chat.answer(world, "supervisor", "Why is copper binding, and what does the plan cost compared with history?")
+    assert "No change recorded" not in a and "$" in a and "Cu P95" in a
+    assert "$" not in chat.answer(world, "crane", "What does it cost?")
 
 
 def test_approve_an_alternative(world):
@@ -176,3 +199,49 @@ def test_approve_an_alternative(world):
         pytest.skip("no distinct alternative for this scenario")
     world.approve(option=alts[0]["candidate_id"])
     assert world.current_plan().status == "SUPERVISOR_APPROVED" and world.current_plan().version == p.version + 1
+
+
+def test_same_cost_alternatives_are_dropped(world):
+    """The LLM offered identical candidates (same mix, other settings) as 'options'; only distinct costs are kept."""
+    cap = {"group_caps_t": {"SCRAP_3A": 590.0}, "relax_recipe_bounds": True}
+    a, b = world.solve_candidate(cap)[1]["candidate_id"], world.solve_candidate(cap)[1]["candidate_id"]
+    rat = dict(email="x", supervisor="x", shift_leader="x", crane="x")
+    v = world.publish_candidate(a, rat, "3A capped.", [b])
+    assert world.alternatives[(v.plan_id, v.version)] == []
+
+
+def test_looser_spec_cannot_be_the_proposal_while_the_live_spec_is_feasible(world):
+    """Live run: the LLM proposed the cheaper plant_tight candidate although a plant_strict one (relaxed floors) was feasible."""
+    t = AgentTools(world, dict(kind="issue", text="3ACh pile is empty", role="crane"))
+    strict = t.call("run_optimizer", {"exclude_groups": ["SCRAP_25A_3ACH"], "relax_recipe_bounds": True})
+    loose = t.call("run_optimizer", {"exclude_groups": ["SCRAP_25A_3ACH"], "spec_class": "plant_tight"})
+    assert strict["status"] == loose["status"] == "optimal"
+    rat = dict(email="ok", supervisor="ok", shift_leader="ok", crane="ok")
+    err = t.call("propose_plan", dict(candidate_id=loose["candidate_id"], rationale=rat))["error"]
+    assert strict["candidate_id"] in err
+    ok = t.call("propose_plan", dict(candidate_id=strict["candidate_id"], rationale=rat, alternatives=[loose["candidate_id"]]))
+    assert ok["version"] and ok["alternatives_offered"] == [loose["candidate_id"]]
+
+
+def test_approving_a_looser_spec_alternative_moves_the_limits_with_it(world):
+    t = AgentTools(world, dict(kind="issue", text="3ACh pile is empty", role="crane"))
+    strict = t.call("run_optimizer", {"exclude_groups": ["SCRAP_25A_3ACH"], "relax_recipe_bounds": True})
+    loose = t.call("run_optimizer", {"exclude_groups": ["SCRAP_25A_3ACH"], "spec_class": "plant_tight"})
+    rat = dict(email="ok", supervisor="ok", shift_leader="ok", crane="ok")
+    t.call("propose_plan", dict(candidate_id=strict["candidate_id"], rationale=rat, alternatives=[loose["candidate_id"]]))
+    world.approve(option=loose["candidate_id"])
+    assert world.spec_class == "plant_tight" and world.ctx.limits["cu"] == 0.25
+    h = world.current_plan().heats[-1]
+    assert world.evaluate(h.slot, h.group_t)["violations"] == []   # judged against the spec it was planned for
+    assert all("$0.00" not in b.plain for b in world.current_plan().binding)   # slack constraints are not listed
+
+
+def test_unsafe_live_plan_after_a_lab_result_is_not_left_alone(world):
+    """Live run: Cu risk 23% after a lab result, default re-run infeasible, the LLM stopped with 'no change'.
+    It gets one reminder to explore; if it still does nothing, the fallback explores and proposes."""
+    world.kf["cu"].e = world.kf["cu"].e * 1.12   # copper-heavier estimates: the live plan now breaches the risk level
+    assert max(world.open_eval()["worst_p_exceed"].values()) > world.alpha + 0.01
+    llm = FakeLLM([call("run_optimizer", {}), Reply(content="Infeasible, so no proposal."), Reply(content="Still no proposal.")])
+    rec = loop.handle(world, dict(kind="lab_surprise", text="CU lab result above the limit.", role=None, ts=world._ts()), llm)
+    assert any(m["role"] == "user" and "above alpha" in m["content"] for m in llm.calls[-1])
+    assert rec["path"] == "fallback after LLM" and rec["decision"] == "replan"

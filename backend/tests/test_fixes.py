@@ -61,9 +61,14 @@ def test_plan_editor_and_tap_are_consistent():
     h = p.heats[0]
     assert abs(h.tap_t - h.target_tap_t) <= w.ctx.tap_tol + 1e-3
     ev = w.evaluate(1, {g: round(v, 3) for g, v in h.group_t.items()})
-    assert abs(ev["delta_cost_per_t"]) < 0.01 and ev["violations"] == []
+    assert abs(ev["delta_cost_per_t"]) < 0.01 and ev["violations"] == [] and ev["process_violations"] == []
     more = dict(h.group_t, IRON_UNITS=h.group_t.get("IRON_UNITS", 0.0) + 40)
-    assert w.evaluate(1, more)["predicted"]["cu"]["mean"] < h.predicted["cu"].mean
+    ev = w.evaluate(1, more)
+    assert ev["predicted"]["cu"]["mean"] < h.predicted["cu"].mean
+    # a hand edit that misses the tap or overfills the furnace is flagged (it looked cheaper per t and passed before)
+    assert any("tap" in v for v in ev["process_violations"]) and any("capacity" in v for v in ev["process_violations"])
+    with pytest.raises(ValueError, match="capacity"):
+        w.edit(1, more)
     assert w.solve_candidate({})[1]["delta_per_t"] == 0.0   # re-solving unchanged inputs is not a "saving"
 
 
@@ -73,3 +78,20 @@ def test_estimator_and_optimizer_share_one_yield_model():
     d = build("cu")
     assert np.allclose(d.B - d.X @ group_yields(), cfg("mill")["heel_t"])
     assert abs(np.median(d.X @ group_yields()) - cfg("mill")["target_tap_t"]) < 1.0   # planned tap = what the mill's charges make
+
+
+def test_plan_is_done_when_every_heat_is_tapped_and_play_stops():
+    from fastapi.testclient import TestClient
+    import scrapchef.api.main as api
+    w = World("SHADOW_REPLAY")
+    w.make_plan(); w.approve(); w.release()
+    api.world = w
+    c = TestClient(api.app)
+    w.agent_pending = 1   # an agent run is in progress: the clock waits instead of tapping its heats away
+    assert c.post("/api/sim/step_heat").json().get("waiting") and not w.progress
+    w.agent_pending = 0
+    for _ in range(len(w.current_plan().heats)):
+        assert not c.post("/api/sim/step_heat").json().get("done")
+    assert w.current_plan().status == "DONE"
+    cursor = w.cursor
+    assert c.post("/api/sim/step_heat").json()["done"] and w.cursor == cursor   # no replay beyond the plan

@@ -118,10 +118,17 @@ def fallback(w, ev: dict, tools, reason: str = "") -> dict:
     return dict(decision="message", reason=f"unhandled event kind {kind}")
 
 
-def faithful_answer(text: str, tools) -> bool:
-    """An LLM answer to a question passes the same guards as any outgoing text."""
+def answer_problem(text: str, tools) -> str:
+    """Why an LLM answer to a question fails the guards that apply to any outgoing text ('' if it passes)."""
+    if not text:
+        return "the answer is empty"
     try:
-        tools._check_text(text, crane_text=text if tools.event.get("role") == "crane" else "")
-        return True
-    except Exception:
-        return False
+        role = tools.event.get("role")
+        tools._check_text(text, no_cost_text=text if role == "shift_leader" else "", crane_text=text if role == "crane" else "")
+        return ""
+    except Exception as e:
+        return str(e).replace(", then call the tool again", "")
+
+
+def faithful_answer(text: str, tools) -> bool:
+    return not answer_problem(text, tools)

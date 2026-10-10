@@ -15,7 +15,7 @@ def _numbers(s: str) -> set[str]:
 
 
 def fact_numbers(f) -> set[str]:
-    """Every number in a nested structure, at 0-2 decimals; fractions also as percentages (0.05 -> 5)."""
+    """Every number in a nested structure, as given and rounded to 0-4 decimals; fractions also as percentages (0.05 -> 5)."""
     out: set[str] = set()
 
     def walk(v):
@@ -28,7 +28,8 @@ def fact_numbers(f) -> set[str]:
         elif isinstance(v, bool) or v is None:
             return
         elif isinstance(v, (int, float)):
-            for d in (0, 1, 2):
+            out.update(_numbers(repr(abs(v))) if "e" not in repr(v) else set())
+            for d in range(5):
                 out.update(_numbers(f"{abs(v):.{d}f}"))
                 if 0 < abs(v) <= 1:
                     out.update(_numbers(f"{abs(v) * 100:.{d}f}"))

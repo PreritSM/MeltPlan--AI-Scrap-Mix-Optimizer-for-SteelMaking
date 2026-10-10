@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from scrapchef.contracts.models import PlanVersion
+from scrapchef.intelligence.optimizer.evaluate import P_TOL
 
 ROLES = ("email", "supervisor", "shift_leader", "crane")
 
@@ -10,7 +11,7 @@ def _headroom(h, status_only: bool):
     out = {}
     for el, p in h.predicted.items():
         if status_only:
-            out[el] = "OK" if p.p_exceed <= 0.05 else "AT RISK"
+            out[el] = "OK" if p.p_exceed <= 0.05 + P_TOL else "AT RISK"   # the chance constraint binds at exactly alpha by design
         else:
             out[el] = p.model_dump()
     return out

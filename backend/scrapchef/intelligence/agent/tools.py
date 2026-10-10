@@ -94,6 +94,8 @@ class AgentTools:
         self.messages_sent: list[dict] = []
         self.candidates: list[str] = []
         self.trace: list[dict] = []                 # every call, for the Process View decision trace
+        self.note = ""                              # why a final answer was not accepted (shown as the path reason)
+        self.cost_numbers: set[str] = set()         # numbers from cost/price fields: never in text for roles without cost access
 
     # ------------------------------------------------------------ dispatch
     def call(self, name: str, raw_args: str | dict) -> dict:
@@ -118,6 +120,7 @@ class AgentTools:
         except Exception as e:  # a tool crash is reported, not raised
             return {"error": f"{name} failed: {type(e).__name__}: {e}"}
         self.seen |= fact_numbers(out)
+        self.cost_numbers |= _cost_numbers(out)
         return out
 
     # ------------------------------------------------------------ tools
@@ -135,7 +138,8 @@ class AgentTools:
                       open_slots=cur.get("open_slots"), open_cost_per_t=cur.get("cost_per_t"),
                       open_worst_p_exceed_under_current_estimates=cur.get("worst_p_exceed"),
                       open_tonnes_by_group={g: round(sum(h.group_t.get(g, 0.0) for h in plan.heats if h.slot in (cur.get("open_slots") or [])), 1)
-                                            for g in GROUPS}),
+                                            for g in GROUPS},
+                      open_charge_t=round(sum(sum(h.group_t.values()) for h in plan.heats if h.slot in (cur.get("open_slots") or [])), 1)),
             limits={k: v for k, v in cfg("specs")["classes"].items()},
             group_estimates_wt_pct=est, drift_alert=(w.drift_alert or {}).get("text"),
             availability_caps_t=w.caps, mock_yard_stock_t={g: round(float(v), 1) for g, v in zip(GROUPS, w.base_inventory)},
@@ -144,6 +148,7 @@ class AgentTools:
                                cu_meas=None if h["elements"]["cu"]["measured"] is None else round(h["elements"]["cu"]["measured"], 4),
                                cu_z=None if h["elements"]["cu"]["z"] is None else round(h["elements"]["cu"]["z"], 2)) for h in w.heat_log[-5:]],
             anti_churn_usd_per_t=w.mill["anti_churn_usd_per_t"],
+            vs_history=_vs_history(w, plan),
         )
 
     def run_optimizer(self, a: RunOptimizer) -> dict:
@@ -155,7 +160,7 @@ class AgentTools:
     def evaluate_mix(self, a: EvaluateMix) -> dict:
         ev = self.w.evaluate(a.slot, dict(a.group_t))
         return dict(slot=a.slot, tap_t=round(ev["tap_actual_t"], 1), cost_per_t=round(ev["cost"]["per_t"], 2),
-                    delta_vs_plan_per_t=round(ev["delta_cost_per_t"], 2), violations=ev["violations"],
+                    delta_vs_plan_per_t=round(ev["delta_cost_per_t"], 2), violations=ev["violations"] + ev["process_violations"],
                     predicted={el: dict(mean=round(p["mean"], 4), p95=round(p["p95"], 4), limit=p["limit"], p_exceed=round(p["p_exceed"], 3))
                                for el, p in ev["predicted"].items()})
 
@@ -181,8 +186,15 @@ class AgentTools:
             block = self.w.churn_blocks(cand["summary"])
             if block:
                 raise ToolError(block)
+        keeps = self._keeps_live_settings
+        if not keeps(cand):   # a looser spec or a higher risk is the supervisor's quality call, not a cost lever for the agent
+            same = [c for c in self.candidates if c != a.candidate_id and (self.w.candidates.get(c) or {}).get("plan") is not None
+                    and keeps(self.w.candidates[c])]
+            if same:
+                raise ToolError(f"{a.candidate_id} changes the live spec class or risk level, but {same[0]} is feasible under the live "
+                                f"settings. Propose {same[0]} and offer {a.candidate_id} as an alternative")
         rat = a.rationale.model_dump()
-        self._check_text(" ".join(rat.values()), crane_text=rat["crane"])
+        self._check_text(" ".join(rat.values()), no_cost_text=rat["shift_leader"], crane_text=rat["crane"])
         new = self.w.publish_candidate(a.candidate_id, rat, self.event["text"], a.alternatives[:2])
         self.outcome = dict(decision="replan", version=new.version, candidate_id=a.candidate_id, explanation=rat,
                             summary=cand["summary"])
@@ -190,19 +202,74 @@ class AgentTools:
                     alternatives_offered=[x["candidate_id"] for x in self.w.alternatives.get((new.plan_id, new.version), [])])
 
     def send_message(self, a: SendMessage) -> dict:
-        self._check_text(a.text, crane_text=a.text if a.role == "crane" else "")
+        self._check_text(a.text, no_cost_text=a.text if a.role == "shift_leader" else "", crane_text=a.text if a.role == "crane" else "")
         self.w.notify(a.role, a.text)
         self.messages_sent.append(dict(role=a.role, text=a.text))
         return dict(ok=True, delivered_to=a.role)
 
     # ------------------------------------------------------------ guards
-    def _check_text(self, text: str, crane_text: str = "") -> None:
+    def _keeps_live_settings(self, cand: dict) -> bool:
+        return cand["spec_class"] == self.w.spec_class and cand["alpha"] <= self.w.alpha + 1e-9
+
+    def _check_text(self, text: str, no_cost_text: str = "", crane_text: str = "") -> None:
+        """no_cost_text (shift leader): no currency and no cost figures, though it may say that costs go to the supervisor.
+        crane_text: the same, and no talk of cost or price at all (crane texts are loading instructions)."""
         bad = unsupported(text, self.seen)
         if bad:
             raise ToolError(f"text contains numbers that are not in any tool result of this run: {', '.join(bad[:8])}. "
                             "Remove them or use only numbers returned by tools, then call the tool again")
-        if crane_text and re.search(r"\$|cost|price|usd|dollar", crane_text, re.I):
+        if crane_text and re.search(r"cost|price", crane_text, re.I):
             raise ToolError("the crane role may not see prices or costs; remove them from the crane text")
+        for t in (x for x in (no_cost_text, crane_text) if x):
+            leaked = sorted(n for n in _numbers_in(t) & self.cost_numbers if "." in n or int(n) >= 100)
+            if re.search(r"\$|€|usd|dollar", t, re.I) or leaked:
+                raise ToolError("the shift_leader and crane roles may not see prices or costs"
+                                + (f" (cost figures in the text: {', '.join(leaked[:5])})" if leaked else "")
+                                + "; remove them from the text for those roles")
+
+
+def _vs_history(w, plan) -> dict | None:
+    """The plan against the last 30 days' actual mix, as the email shows it (all heats of the plan, same assumed prices)."""
+    rm = w.risk_match(plan)
+    if not rm:
+        return None
+    per_t = sum(h.cost.total for h in plan.heats) / sum(h.steel_t for h in plan.heats)
+    h, m = rm["hist_per_t"], rm["matched_per_t"]
+    return dict(plan_cost_per_t=round(per_t, 2), historical_mix_cost_per_t=round(h, 2),
+                historical_mix_worst_breach_probability=round(rm["worst_p"], 2), historical_mix_worst_element=rm["worst_el"],
+                optimiser_at_historical_risk_cost_per_t=round(m, 2), saving_at_same_risk_per_t=round(h - m, 2),
+                plan_minus_same_risk_optimum_per_t=round(per_t - m, 2),
+                note="the plan costs more than the same-risk optimum because it is held to the 95% limits")
+
+
+COST_KEY = re.compile(r"cost|price|per_t|usd|saving", re.I)   # cost_per_t, delta_per_t, delta_breakdown.*_per_t, vs_history ...
+
+
+def _cost_numbers(v, under_cost: bool = False) -> set[str]:
+    """Numbers stored under cost-like keys anywhere in a tool result."""
+    out: set[str] = set()
+    if isinstance(v, dict):
+        for k, x in v.items():
+            out |= _cost_numbers(x, under_cost or bool(COST_KEY.search(str(k))))
+    elif isinstance(v, (list, tuple)):
+        for x in v:
+            out |= _cost_numbers(x, under_cost)
+    elif under_cost and isinstance(v, (int, float)) and not isinstance(v, bool) and v:
+        out |= _cost_forms(float(v))
+    elif isinstance(v, str):   # "$15.65/t" inside binding-constraint text
+        out |= {n for m in re.findall(r"\$\s?(\d+(?:\.\d+)?)", v) for n in _cost_forms(float(m))}
+    return out
+
+
+def _cost_forms(v: float) -> set[str]:
+    """How a cost figure would be quoted: as given or to 2 decimals; shorter roundings only for prices (>= 100), so a
+    tonnage such as 7.8 t is not mistaken for a rounded cost delta of 7.78."""
+    forms = [repr(abs(v)), f"{abs(v):.2f}"] + ([f"{abs(v):.0f}", f"{abs(v):.1f}"] if abs(v) >= 100 else [])
+    return set().union(*(fact_numbers(f) for f in forms))
+
+
+def _numbers_in(text: str) -> set[str]:
+    return fact_numbers(text)
 
 
 def _safe_json(s: str):

@@ -30,9 +30,10 @@ function ControlSuite({ plan, groups, onClose }: { plan: any; groups: string[]; 
       <div><b>{money(ev.cost.per_t)}/t</b> <span style={{ color: ev.delta_cost_per_t > 0 ? "var(--bad)" : "var(--ok)" }}>({ev.delta_cost_per_t >= 0 ? "+" : ""}{ev.delta_cost_per_t.toFixed(2)} vs plan)</span></div>
       {Object.entries(ev.predicted).map(([el, p]: any) => <Headroom key={el} el={el} p={p} />)}
       {ev.violations.length > 0 && <div className="banner">Over limit: {ev.violations.join(", ").toUpperCase()}</div>}
+      {ev.process_violations?.map((v: string) => <div key={v} className="banner">⚠ {v}</div>)}
     </>}
     <div className="row"><button onClick={() => setMix({ ...heat.group_t })}>Revert</button>
-      <button className="primary" onClick={async () => { await act("/api/plan/edit", { slot, group_t: mix }); onClose(); }}>Save as new version</button></div>
+      <button className="primary" disabled={total > 140} title={total > 140 ? "The charge does not fit the furnace" : ""} onClick={async () => { await act("/api/plan/edit", { slot, group_t: mix }); onClose(); }}>Save as new version</button></div>
   </div>);
 }
 

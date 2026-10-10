@@ -4,22 +4,43 @@ from __future__ import annotations
 from .templates import pretty
 
 
+def _last_explanation(world, role: str) -> str | None:
+    """The newest agent or plan explanation this role may see (the crane only gets crane text)."""
+    for d in reversed(world.decisions):
+        ex = d.get("explanation") or {}
+        if role in ex:
+            return ex[role]
+        if role != "crane":
+            for k in ("supervisor", "email", "shift_leader"):
+                if k in ex:
+                    return ex[k]
+    return None
+
+
 def answer(world, role: str, text: str) -> str:
+    """Up to three facts that match the question: the latest explanation (why), cost vs history, worst-case Cu."""
     p = world.current_plan()
     if p is None:
         return "No plan yet. Step to the 06:00 cycle first."
     t = text.lower()
     tot = sum(h.steel_t for h in p.heats)
     per_t = sum(h.cost.total for h in p.heats) / tot
-    if any(k in t for k in ("why", "change", "reason")) and world.decisions:
-        d = world.decisions[-1]
-        return d["explanation"].get(role if role in d["explanation"] else "supervisor", "No change recorded.") if d.get("explanation") else "No change recorded."
-    if any(k in t for k in ("cost", "price", "$")) and role in ("supervisor", "email"):
-        return f"Plan v{p.version} costs ${per_t:.2f}/t over {len(p.heats)} heats."
-    if any(k in t for k in ("risk", "copper", "cu", "limit")):
+    parts = []
+    if any(k in t for k in ("why", "change", "reason")):
+        ex = _last_explanation(world, role)
+        if ex:
+            parts.append(ex)
+    if any(k in t for k in ("cost", "price", "$", "history", "cheaper", "saving")) and role in ("supervisor", "email"):
+        rm = world.risk_match(p)
+        hist = (f" The last 30 days' mix costs ${rm['hist_per_t']:.2f}/t at the same prices; the optimiser at that mix's risk would cost "
+                f"${rm['matched_per_t']:.2f}/t.") if rm else ""
+        parts.append(f"Plan v{p.version} costs ${per_t:.2f}/t over {len(p.heats)} heats.{hist}")
+    if any(k in t for k in ("risk", "copper", "cu", "limit", "bind")):
         worst = max(p.heats, key=lambda h: h.predicted["cu"].p95)
         pr = worst.predicted["cu"]
-        return f"Worst Cu P95 is {pr.p95:.3f}% against a {pr.limit:.3f}% limit (heat {worst.slot})."
+        parts.append(f"Worst Cu P95 is {pr.p95:.3f}% against a {pr.limit:.3f}% limit (heat {worst.slot}).")
+    if parts:
+        return " ".join(parts[:3])
     g = {}
     for h in p.heats:
         for k, v in h.group_t.items():

@@ -11,6 +11,7 @@ from scipy.stats import norm
 from scrapchef.data.store import GROUPS, ROOT, cfg, group_yields, last_chem, recipe_bounds
 
 ELS = ["cu", "sn", "ni", "mo"]
+HEEL_PASSES, HEEL_TOL = 6, 1e-4   # A14 fixed point (wt%): 2 fixed passes left later heats ~0.2 pp above alpha; settles in 4-5
 
 
 @dataclass
@@ -90,7 +91,7 @@ def solve(ctx: Context, taps: list[float], mode: str = "chance", alpha: float = 
     zd = z_override if isinstance(z_override, dict) else {e: (z_override if z_override is not None else z_of(alpha)) for e in ELS}
     heel = [dict(ctx.heel_c0) for _ in range(H)]
     res = None
-    for _ in range(2 if (mode == "chance" and H > 1) else 1):  # A14: 2-pass fixed point on heel chemistry
+    for _ in range(HEEL_PASSES if (mode == "chance" and H > 1) else 1):  # A14: fixed point on heel chemistry, until it settles
         x = cp.Variable((H, G), nonneg=True)
         cons, tagged = [], []
         cost_vec = ctx.prices + ctx.energy_k
@@ -133,11 +134,14 @@ def solve(ctx: Context, taps: list[float], mode: str = "chance", alpha: float = 
         if prob.status not in ("optimal", "optimal_inaccurate"):
             return dict(status=prob.status, x=None)
         X = x.value
+        used = [dict(hh) for hh in heel]
         for h in range(1, H):  # heel for next heat = this heat's planned P50
             B = taps[h - 1] + ctx.heel_t
             for el in ELS:
                 heel[h][el] = float((ctx.heel_t * heel[h - 1][el] + ctx.est.mu[el] @ X[h - 1]) / B)
-        res = dict(status=prob.status, x=X, cost=float(prob.value), heel=heel, tagged=tagged, taps=taps)
+        res = dict(status=prob.status, x=X, cost=float(prob.value), heel=[dict(hh) for hh in heel], tagged=tagged, taps=taps)
+        if max(abs(heel[h][el] - used[h][el]) for h in range(H) for el in ELS) < HEEL_TOL:
+            break   # the plan was solved against the heel it produces
     return res
 
 
@@ -152,6 +156,8 @@ def duals(ctx: Context, res, slot0: int = 1) -> list[dict]:
         if kind == "chance":
             T = res["taps"][h]; B = T + ctx.heel_t
             per_001 = d * 0.01 * B / T      # $ per t steel per 0.01 wt% of extra headroom
+            if abs(per_001) < 0.005:          # solver noise on a slack constraint: it would read "worth $0.00/t"
+                continue
             out.append(dict(kind=kind, heat=h, key=key, dual=d, usd_per_t_per_0p01pct=per_001,
                             plain=f"Heat {h + slot0}: each extra 0.01% {key.upper()} headroom is worth ${per_001:.2f}/t"))
         elif kind == "inventory":
