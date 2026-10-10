@@ -39,6 +39,7 @@ class ScheduledHeat(BaseModel):
 
 class HandlingEvent(BaseModel):
     ts: str
+    plan_id: str | None = None
     crane_id: str
     mat_code: int
     est_tonnes: float

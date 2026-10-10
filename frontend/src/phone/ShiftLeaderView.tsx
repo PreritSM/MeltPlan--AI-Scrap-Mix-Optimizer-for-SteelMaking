@@ -15,7 +15,7 @@ export default function ShiftLeaderView() {
     <div className="small">Timeline</div>
     {plan.heats.map((h: any) => (<div key={h.slot} className="li">
       <b>Heat {h.slot}</b><span className="small">{h.target_tap_t} t</span><span className="sp" />
-      <span className="small">{h.progress}</span>
+      <span className="small" title={h.progress === "loaded" ? "Charged in baskets, waiting for the furnace" : ""}>{h.progress}</span>
       {meas[h.slot] && <span className="small">Cu pred {meas[h.slot].predicted.toFixed(3)} / meas {meas[h.slot].measured.toFixed(3)}</span>}
       <span title="headroom status" style={{ color: Object.values(h.headroom).includes("AT RISK") ? "var(--bad)" : "var(--ok)" }}>●</span>
     </div>))}

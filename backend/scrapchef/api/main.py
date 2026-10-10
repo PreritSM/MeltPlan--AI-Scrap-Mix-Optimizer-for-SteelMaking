@@ -159,6 +159,16 @@ def grab(b: GrabBody):
     return guard(lambda: world.grab_done(b.slot, b.basket, b.mat_code, b.tonnes).model_dump())
 
 
+class BasketBody(BaseModel):
+    slot: int
+    basket: int
+
+
+@app.post("/api/crane/basket_complete")
+def basket_complete(b: BasketBody):
+    return guard(lambda: world.basket_complete(b.slot, b.basket))
+
+
 class ShortBody(BaseModel):
     group: str
 

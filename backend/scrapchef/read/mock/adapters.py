@@ -43,11 +43,14 @@ class MockHandling:
     def __init__(self):
         self.log: list[HandlingEvent] = []
 
-    def record(self, ts, crane, code, t, slot, basket) -> HandlingEvent:
-        e = HandlingEvent(ts=ts, crane_id=crane, mat_code=code, est_tonnes=t, heat_slot=slot, basket_no=basket,
+    def record(self, ts, crane, code, t, slot, basket, plan_id=None) -> HandlingEvent:
+        e = HandlingEvent(ts=ts, plan_id=plan_id, crane_id=crane, mat_code=code, est_tonnes=t, heat_slot=slot, basket_no=basket,
                           confidence=float(np.clip(np.random.default_rng(slot * 31 + basket).normal(0.9, 0.04), 0.7, 0.99)))
         self.log.append(e)
         return e
+
+    def find(self, plan_id, slot, basket, code) -> HandlingEvent | None:
+        return next((e for e in self.log if (e.plan_id, e.heat_slot, e.basket_no, e.mat_code) == (plan_id, slot, basket, code)), None)
 
     def events(self, since: str) -> list[HandlingEvent]:
         return [e for e in self.log if e.ts >= since]

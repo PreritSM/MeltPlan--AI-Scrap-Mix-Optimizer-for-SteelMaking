@@ -277,3 +277,50 @@ def test_llm_rebuilds_a_stale_client_once_on_connection_error(monkeypatch):
         openai.APIConnectionError(request=httpx.Request("POST", "http://llm.test"))))
     with pytest.raises(openai.APIConnectionError):   # a second failure in a row is raised for the caller's fallback
         llm.chat([{"role": "user", "content": "hi"}])
+
+
+def _released(w):
+    w.approve(); w.release()
+    return w.current_plan().heats[0]
+
+
+def test_grabs_are_idempotent_and_basket_complete_fills_the_rest(world):
+    h = _released(world)
+    b1 = h.baskets[0]
+    first = b1.items[0]
+    e = world.grab_done(1, 1, first.mat_code, first.tonnes)
+    assert world.grab_done(1, 1, first.mat_code, 99.0) == e and len(world.handling.log) == 1   # same line twice: one event
+    r = world.basket_complete(1, 1)
+    assert r["auto_grabbed"] == len(b1.items) - 1 and len(world.handling.log) == len(b1.items)
+    assert {(x.mat_code, x.est_tonnes) for x in world.handling.log[1:]} == {(it.mat_code, it.tonnes) for it in b1.items[1:]}
+    seq = world.store.last_seq()
+    assert world.basket_complete(1, 1)["auto_grabbed"] == 0 and len(world.handling.log) == len(b1.items)
+    assert world.store.last_seq() == seq                       # a repeat is a no-op: no events
+    crane = world.phone("crane")["plan"]["loading"][0]
+    assert crane["baskets_complete"] == [1] and set(crane["grabbed"]) == {f"1-{it.mat_code}" for it in b1.items}
+
+
+def test_all_baskets_complete_loads_the_heat_and_freezes_it(world):
+    h = _released(world)
+    for b in h.baskets:
+        assert world.basket_complete(1, b.basket_no)["auto_grabbed"] == len(b.items)
+    assert world.progress[1] == "loaded"
+    assert [e["kind"] for e in world.store.events_since(0)].count("heat_loaded") == 1
+    it = h.baskets[0].items[0]
+    world.grab_done(1, 2 if len(h.baskets) > 1 else 1, it.mat_code, 1.0)   # a later grab never downgrades
+    assert world.progress[1] == "loaded"
+    mix = dict(h.group_t)
+    rec = loop.handle(world, dict(kind="inbox", text=supplier_email(world), role="logistics", ts=world._ts()), world.llm)
+    assert rec["decision"] == "replan" and world.current_plan().heats[0].group_t == mix   # loaded = frozen like loading
+    world.step_heat()
+    assert world.progress[1] == "tapped"
+    with pytest.raises(ValueError, match="already tapped"):
+        world.basket_complete(1, 1)
+
+
+def test_basket_complete_needs_a_released_plan(world):
+    with pytest.raises(ValueError, match="no released plan"):
+        world.basket_complete(1, 1)
+    _released(world)
+    with pytest.raises(ValueError, match="not on the released list"):
+        world.basket_complete(1, 99)

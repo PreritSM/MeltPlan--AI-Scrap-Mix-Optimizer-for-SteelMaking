@@ -54,8 +54,9 @@ export const useSim = create<S>((set, getS) => ({
       set((s) => {
         const unread = { ...s.unread };
         (ev.audience as string[]).forEach((a) => { if (a in unread && a !== s.openRole && ev.kind !== "reset") unread[a as Role]++; });
-        const msg: Record<string, string> = { email: "New plan email", replan: "Plan changed by agent", released: "Plan released", approved: "Plan approved", drift: "Composition drift alert", shortage: "Shortage reported", issue: "Issue reported", message: "Message from the agent", chat: "Agent replied", plan_done: "All heats of the plan tapped" };
-        const toasts = msg[ev.kind] ? [...s.toasts.slice(-2), { id: ++tid, text: msg[ev.kind] }] : s.toasts;
+        const msg: Record<string, string> = { email: "New plan email", replan: "Plan changed by agent", released: "Plan released", approved: "Plan approved", drift: "Composition drift alert", shortage: "Shortage reported", issue: "Issue reported", message: "Message from the agent", chat: "Agent replied", plan_done: "All heats of the plan tapped", basket_complete: "Basket complete" };
+        const text = ev.kind === "heat_loaded" ? `Heat ${ev.payload?.slot} loaded` : msg[ev.kind];
+        const toasts = text ? [...s.toasts.slice(-2), { id: ++tid, text }] : s.toasts;
         return { unread: ev.kind === "reset" ? { email: 0, supervisor: 0, shift_leader: 0, crane: 0 } : unread, pulse: s.pulse + 1, toasts };
       });
       clearTimeout(t); t = setTimeout(() => getS().refresh(), 150);

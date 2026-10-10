@@ -89,7 +89,8 @@ class World:
                 self.e_true["cu"][GROUPS.index(drift_group)] *= drift_factor
             self.drift_group = drift_group
             self.plan_id: str | None = None
-            self.progress: dict[int, str] = {}
+            self.progress: dict[int, str] = {}   # planned -> loading (first grab) -> loaded (all baskets complete) -> tapped
+            self.baskets_done: dict[int, set[int]] = {}   # slot -> completed basket numbers, for self.plan_id
             self.plan_heat0 = 0           # replay index of plan slot 1
             self.decisions: list[dict] = []
             self.emails: list[dict] = []
@@ -195,7 +196,7 @@ class World:
                 return None
             self.plan_id, self.plan_heat0 = date, idx[0]
             self._expire_messages(list(self.messages), "new daily plan")
-            self.progress = {}
+            self.progress, self.baskets_done = {}, {}
             self.released_version = None
             self.store.save(plan, "agent", self._ts(), trigger)
             facts = dict(decision="new_plan", version=version, trigger_text="Daily 06:00 plan.", n_heats=len(plan.heats), moves=[],
@@ -313,11 +314,11 @@ class World:
         return p
 
     def _split(self, plan: PlanVersion) -> tuple[int, dict[int, np.ndarray]]:
-        """(start, frozen): solve from the first heat after the last tapped one; loading / user-frozen heats keep their mix."""
+        """(start, frozen): solve from the first heat after the last tapped one; loading / loaded / user-frozen heats keep their mix."""
         tapped = [i for i, h in enumerate(plan.heats) if self.progress.get(h.slot) == "tapped"]
         start = max(tapped) + 1 if tapped else 0
         frozen = {j: np.array([h.group_t.get(g, 0.0) for g in GROUPS]) for j, h in enumerate(plan.heats[start:])
-                  if self.progress.get(h.slot) == "loading" or h.frozen}
+                  if self.progress.get(h.slot) in ("loading", "loaded") or h.frozen}
         return start, frozen
 
     def _heel_start(self, plan: PlanVersion) -> dict[str, float]:
@@ -446,7 +447,7 @@ class World:
             if plan is None or cand["base_version"] not in ok_bases:
                 raise ValueError("stale candidate: the plan changed since it was computed; run the optimiser again")
             for h_new, h_old in zip(cand["plan"].heats, plan.heats):
-                if self.progress.get(h_old.slot) in ("tapped", "loading") and h_new.group_t != h_old.group_t:
+                if self.progress.get(h_old.slot) in ("tapped", "loading", "loaded") and h_new.group_t != h_old.group_t:
                     raise ValueError(f"stale candidate: heat {h_old.slot} has started since; run the optimiser again")
             new = cand["plan"].model_copy(deep=True)
             new.version, new.parent_version = self.store.next_version(plan.plan_id), plan.version
@@ -592,14 +593,50 @@ class World:
             return ev
 
     def grab_done(self, slot: int, basket: int, mat_code: int, t: float):
+        """Idempotent per (plan, slot, basket, code): a repeat returns the recorded event and emits nothing."""
         with self.lock:
-            e = self.handling.record(self._ts(), "crane-1", mat_code, t, slot, basket)
+            e = self.handling.find(self.plan_id, slot, basket, mat_code)
+            if e:
+                return e
+            e = self.handling.record(self._ts(), "crane-1", mat_code, t, slot, basket, self.plan_id)
             p = self.current_plan()
             if p and p.status == "RELEASED":
                 self.store.transition(p, "LOADING", "crane", self._ts(), "first grab")
-            self.progress[slot] = self.progress.get(slot) if self.progress.get(slot) == "tapped" else "loading"
+            self.progress.setdefault(slot, "planned")
+            if self.progress[slot] == "planned":
+                self.progress[slot] = "loading"
             self._emit("grab_done", e.model_dump(), ["process", "shift_leader", "crane"])
             return e
+
+    def basket_complete(self, slot: int, basket: int) -> dict:
+        """Every line of the basket is in: lines not yet confirmed are recorded at planned tonnes (the log stays append-only).
+        All baskets complete -> the heat is "loaded" (frozen, waiting for the furnace; Step heat taps it)."""
+        with self.lock:
+            rv = self.released_version
+            rel = next((v for v in self.store.versions() if v.plan_id == self.plan_id and v.version == rv), None) if rv else None
+            if rel is None:
+                raise ValueError("no released plan: the crane has no list to load from")
+            h = next((x for x in rel.heats if x.slot == slot), None)
+            b = h and next((x for x in h.baskets if x.basket_no == basket), None)
+            if b is None:
+                raise ValueError(f"heat {slot} basket {basket} is not on the released list")
+            if self.progress.get(slot) == "tapped":
+                raise ValueError(f"heat {slot} is already tapped")
+            done = self.baskets_done.setdefault(slot, set())
+            state = lambda n: dict(slot=slot, basket=basket, auto_grabbed=n, baskets_complete=sorted(done), progress=self.progress.get(slot, "planned"))
+            if basket in done:
+                return state(0)
+            n = 0
+            for it in b.items:
+                if not self.handling.find(self.plan_id, slot, basket, it.mat_code):
+                    self.grab_done(slot, basket, it.mat_code, it.tonnes)
+                    n += 1
+            done.add(basket)
+            self._emit("basket_complete", dict(slot=slot, basket=basket, auto_grabbed=n), ["process", "shift_leader", "crane"])
+            if done >= {x.basket_no for x in h.baskets}:
+                self.progress[slot] = "loaded"
+                self._emit("heat_loaded", dict(slot=slot), ["process", "supervisor", "shift_leader", "crane"])
+            return state(n)
 
     def report_shortage(self, group: str):
         return self.report_issue("shift_leader", f"{group} unavailable.")
@@ -620,6 +657,9 @@ class World:
                     rv = self.released_version
                     rel = next((v for v in self.store.versions() if v.plan_id == p.plan_id and v.version == rv), None) if rv else None
                     view = project(rel, "crane", None, self.explanation, self.progress) if rel else dict(status="NO RELEASED PLAN", loading=[])
+                    for hh in view["loading"]:
+                        hh["grabbed"] = [f"{e.basket_no}-{e.mat_code}" for e in self.handling.log if e.plan_id == rel.plan_id and e.heat_slot == hh["slot"]]
+                        hh["baskets_complete"] = sorted(self.baskets_done.get(hh["slot"], ()))
                     view["banner"] = self.pending_banner
                 out["plan"] = view
             if role == "supervisor":
