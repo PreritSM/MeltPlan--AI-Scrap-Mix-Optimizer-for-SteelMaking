@@ -56,3 +56,8 @@ button:disabled{opacity:.45;cursor:default}button:focus-visible,.handle:focus-vi
 .tab{padding:6px 12px;border-radius:99px;border:1px solid var(--line)}.tab.on{background:var(--accent);color:#fff;border-color:var(--accent)}
 .li{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--line)}.li.done{opacity:.4;text-decoration:line-through}
 input[type=range]{width:100%}input[type=text]{width:100%;padding:8px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink)}
+.chip.busy{color:var(--accent);animation:pl 1s infinite alternate}
+.run{border-top:1px solid var(--line);padding:8px 0}.step{margin:4px 0 4px 10px;font-size:12px;overflow-wrap:anywhere}
+.step.tool{border-left:2px solid var(--derived);padding-left:6px}.step.tool.err{border-left-color:var(--bad)}
+.step.thinking{color:var(--mute);font-style:italic}.step.text{color:var(--ink)}
+.opt{border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin:6px 0}.msg{border-left:4px solid var(--estimated)}

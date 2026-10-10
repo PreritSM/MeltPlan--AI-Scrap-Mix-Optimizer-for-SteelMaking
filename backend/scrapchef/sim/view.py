@@ -65,9 +65,12 @@ def process_state(w) -> dict:
                    dict(mwh_per_t=energy and energy["mwh_per_t"][0], group_effects=energy and energy["use_group_effects"]), dict(models=energy and energy["models"], note="Tariff ASSUMED; MWh = Σ MW (D13)"))
     bt_card = card("backtest", "intelligence", "Back-test", "ESTIMATED", "fresh" if bt else "idle", dict(heats=bt and bt["n_heats"]),
                    dict(saving_pct=bt and bt["saving_pct"], ci=bt and bt["ci"]), dict(result=bt, note="Depends on ASSUMED prices"))
-    ag_card = card("agent", "intelligence", "Re-planning agent", "ESTIMATED", "running" if w.decisions and w.decisions[-1]["decision"] == "replan" else "idle" if not w.decisions else "fresh",
-                   dict(decisions=len(w.decisions)), dict(replans=sum(1 for d in w.decisions if d["decision"] == "replan"), suppressed=sum(1 for d in w.decisions if d["decision"] == "no_change")),
-                   dict(trace=w.decisions[-15:]))
+    runs = [d for d in w.decisions if d.get("path")]   # agent runs (the 06:00 plan is deterministic and has no path)
+    ag_card = card("agent", "intelligence", "Re-planning agent", "ESTIMATED", "running" if w.agent_pending else ("fresh" if runs else "idle"),
+                   dict(runs=len(runs), llm=w.llm.model if w.llm.available else "off"),
+                   dict(replans=sum(1 for d in runs if d["decision"] == "replan"), no_change=sum(1 for d in runs if d["decision"] == "no_change"),
+                        last_path=runs[-1]["path"] if runs else None),
+                   dict(trace=w.decisions[-15:], llm=w.llm.describe()))
     intel = [est_card, en_card, opt_card, bt_card, ag_card]
     st = plan.status if plan else None
     chain = [("email", "Daily email plan", st in ("EMAILED", "SUPERVISOR_APPROVED", "RELEASED", "LOADING", "DONE")),
@@ -79,5 +82,6 @@ def process_state(w) -> dict:
     return dict(clock=w._ts(), mode=w.mode, plan_status=st, plan_version=plan and plan.version, cursor=w.cursor, n_replay=len(w.replay),
                 lanes=dict(read=read, data=data, intelligence=intel, act=act), selected_heat=sel,
                 heat_strip=[dict(heatid=h["heatid"], z=h["elements"]["cu"]["z"], slot=h["slot"]) for h in w.heat_log[-60:]],
-                last_event=(w.store.events_since(0) or [{}])[-1].get("seq", 0), drift_alert=w.drift_alert,
+                last_event=w.store.last_seq(), drift_alert=w.drift_alert,
+                agent=dict(busy=w.agent_pending > 0, llm=w.llm.describe(), available=w.llm.available),
                 legend=["REAL", "DERIVED", "ESTIMATED", "ASSUMED", "MOCK"], groups=GROUPS)

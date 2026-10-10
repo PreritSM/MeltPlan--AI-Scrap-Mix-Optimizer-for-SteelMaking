@@ -1,0 +1,126 @@
+"""Deterministic fallback for the agent: same tools, same guards, fixed rules. Runs when there is no LLM, or the LLM run fails
+(timeout, API error, malformed reply, no terminal action). It always ends with a visible outcome, never silence."""
+from __future__ import annotations
+
+import re
+
+from . import chat
+from .narrator import fact_numbers, narrate
+from .templates import pretty
+
+# free-text group aliases (full group names first: '_' is a word character, so '\b3a\b' does not match inside 'scrap_3a')
+ALIASES = [
+    (r"scrap_25a_3ach|\b3ach\b|\b25a\d?\b", "SCRAP_25A_3ACH"),
+    (r"scrap_16a_6a|\b16a\b|\b6a\b", "SCRAP_16A_6A"),
+    (r"scrap_3a\b|\b3a\b", "SCRAP_3A"),
+    (r"iron_units|\biron\b|\bhbi\b|\bpig\b|\bdri\b", "IRON_UNITS"),
+]
+NEG = r"\b(no|none|unavailable|out of|zero|not available|run out|ran out|without)\b"
+QTY = r"(\d+(?:\.\d+)?)\s*(?:t|tonnes?|tons?)\b"
+
+
+def parse_issue(text: str) -> tuple[dict, str]:
+    """Free text -> optimiser settings, with a plain description of the interpretation ('' if nothing understood)."""
+    t = text.lower()
+    groups = []
+    for pat, g in ALIASES:
+        if re.search(pat, t) and g not in groups:
+            groups.append(g)
+    if not groups:
+        return {}, ""
+    qty = re.search(QTY, t)
+    if qty:
+        return {"group_caps_t": {groups[0]: float(qty.group(1))}}, f"{pretty(groups[0])} capped at {qty.group(1)} t"
+    if re.search(NEG, t):
+        return {"exclude_groups": groups}, "excluded: " + ", ".join(pretty(g) for g in groups)
+    return {}, ""
+
+
+def explore(tools, base: dict, include_base: bool = True) -> list[dict]:
+    """Least-relaxed first: as asked, then relax recipe bounds, then a looser spec, then a higher risk level. Up to 3 feasible."""
+    seq = [base, {**base, "relax_recipe_bounds": True}, {**base, "relax_recipe_bounds": True, "spec_class": "plant_tight"},
+           {**base, "relax_recipe_bounds": True, "alpha": 0.10}][0 if include_base else 1:]
+    feasible = []
+    for p in seq:
+        out = tools.call("run_optimizer", p)
+        if out.get("status") == "optimal" and all(abs(out["cost_per_t"] - f["cost_per_t"]) > 0.05 for f in feasible):
+            feasible.append(out)   # identical-cost options are not real alternatives
+            if len(feasible) == 3:
+                break
+    return feasible
+
+
+def _publish(w, tools, cand: dict, trigger_text: str, alternatives: list[str]) -> dict:
+    facts = dict(decision="replan", version=w.store.next_version(w.plan_id), trigger_text=trigger_text,
+                 n_heats=len(cand.get("open_slots") or []), moves=cand.get("moves", []),
+                 cost_delta_per_t=cand.get("delta_per_t") or 0.0, new_per_t=cand.get("cost_per_t"),
+                 binding=(cand.get("binding") or [""])[0], reason="")
+    nar = narrate(facts)  # templates only: the fallback stays deterministic
+    tools.seen |= fact_numbers(facts)  # derived deterministically from tool results (version, heat count), so allowed
+    out = tools.call("propose_plan", dict(candidate_id=cand["candidate_id"], rationale=nar["text"], alternatives=alternatives))
+    if out.get("error"):
+        return dict(decision="infeasible", reason=out["error"])
+    return dict(decision="replan", version=out["version"], explanation=nar["text"], narrator=nar["narrator"], facts=facts)
+
+
+def fallback(w, ev: dict, tools, reason: str = "") -> dict:
+    kind, text, role = ev["kind"], ev["text"], ev.get("role")
+    if kind == "question":
+        ans = chat.answer(w, role or "supervisor", text)
+        w.post_chat(role or "supervisor", ans)
+        return dict(decision="answer", explanation={role or "supervisor": ans})
+
+    if kind in ("lab_surprise", "drift"):
+        cand = tools.call("run_optimizer", {})
+        if cand.get("status") in ("no_plan", "no_open_heats"):
+            return dict(decision="no_change", reason=f"nothing to re-plan ({cand['status']})")
+        if cand.get("status") != "optimal":   # e.g. the bath itself is contaminated: explore before giving up
+            options = explore(tools, {}, include_base=False)
+            if not options:
+                msg = f"{text} No feasible re-plan under the updated estimates, even with relaxed bounds, a looser spec or 10% risk; please review the open heats."
+                tools.call("send_message", dict(role="supervisor", text=msg))
+                return dict(decision="infeasible", reason="no feasible option")
+            return _publish(w, tools, options[0], f"{text} The default re-plan is infeasible; relaxed settings were needed.",
+                            [o["candidate_id"] for o in options[1:]])
+        block = w.churn_blocks(cand)
+        if block:
+            return dict(decision="no_change", reason=block, facts=dict(moves=cand.get("moves", [])),
+                        explanation={"supervisor": f"No plan change: {block}"})
+        return _publish(w, tools, cand, text, [])
+
+    if kind in ("issue", "inbox"):
+        params, meaning = parse_issue(text)
+        if not params:
+            msg = f"Issue from {role or 'the yard'}: \"{text}\". The automatic fallback could not interpret it; please review."
+            tools.call("send_message", dict(role="supervisor", text=msg))
+            tools.call("send_message", dict(role="shift_leader", text=msg))
+            return dict(decision="message", reason="issue not understood by the fallback")
+        options = explore(tools, params)
+        if not options:
+            msg = f"{text} ({meaning}). No feasible mix even with relaxed bounds, a looser spec or 10% risk; the current plan stands until reviewed."
+            tools.call("send_message", dict(role="supervisor", text=msg))
+            return dict(decision="infeasible", reason="no feasible option")
+        rec = _publish(w, tools, options[0], f"{text} ({meaning}).", [o["candidate_id"] for o in options[1:]])
+        if rec["decision"] == "replan":
+            tools.call("send_message", dict(role="crane", text="Plan change pending approval: hold heats not yet loaded until the new list arrives."))
+        return rec
+
+    if kind == "rejection":
+        params, meaning = parse_issue(text)
+        options = explore(tools, params) if params else [c for c in [tools.call("run_optimizer", {})] if c.get("status") == "optimal"]
+        if not options:
+            tools.call("send_message", dict(role="supervisor", text="No feasible re-plan found for the rejected version; please edit manually."))
+            return dict(decision="infeasible", reason="no feasible option")
+        note = f"Rejected: \"{text}\"." + (f" Applied: {meaning}." if meaning else " The fallback cannot interpret the reason, so the same optimum is re-proposed; use Edit for manual changes.")
+        return _publish(w, tools, options[0], note, [o["candidate_id"] for o in options[1:]])
+
+    return dict(decision="message", reason=f"unhandled event kind {kind}")
+
+
+def faithful_answer(text: str, tools) -> bool:
+    """An LLM answer to a question passes the same guards as any outgoing text."""
+    try:
+        tools._check_text(text, crane_text=text if tools.event.get("role") == "crane" else "")
+        return True
+    except Exception:
+        return False

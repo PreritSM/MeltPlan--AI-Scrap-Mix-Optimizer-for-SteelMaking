@@ -10,7 +10,7 @@ export const post = (p: string, body: unknown = {}) =>
   fetch(p, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(j);
 
 export function subscribe(onEvent: (e: any) => void) {
-  const es = new EventSource("/api/events?since=0");
+  const es = new EventSource("/api/events");
   es.onmessage = (m) => onEvent(JSON.parse(m.data));
   return () => es.close();
 }

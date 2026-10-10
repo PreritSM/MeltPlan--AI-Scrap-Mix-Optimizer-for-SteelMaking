@@ -10,6 +10,34 @@ const Table = ({ rows, cols }: { rows: any[]; cols?: string[] }) => {
 };
 const Json = ({ v }: { v: any }) => <div className="mono">{JSON.stringify(v, null, 1)}</div>;
 
+/** One agent run: event -> model reasoning/text and tool calls in order -> outcome. */
+function AgentRun({ d }: { d: any }) {
+  const path = d.path ?? "deterministic";
+  const kind = path === "llm" ? "ESTIMATED" : path.startsWith("fallback") ? "ASSUMED" : "DERIVED";
+  return (
+    <div className="run">
+      <div className="row" style={{ margin: 0 }}>
+        <b>{d.ts?.replace("T", " ")}</b><code>{d.trigger}</code>
+        <span className={`badge ${kind}`} title={d.path_reason ?? ""}>{path.toUpperCase()}</span>
+        <span className="sp" /><b>{d.decision}</b>{d.version ? ` → v${d.version}` : ""}
+      </div>
+      {d.trigger_text && <div className="small">“{d.trigger_text}”</div>}
+      {(d.steps ?? []).map((s: any, k: number) => s.type === "tool" ? (
+        <div key={k} className={`step tool ${s.error ? "err" : ""}`}>
+          <code>{s.name}</code>({Object.keys(s.args ?? {}).length ? JSON.stringify(s.args) : ""})
+          <div className="small">{s.error ? `✗ ${s.error}` : `→ ${JSON.stringify(s.result)}`}</div>
+        </div>
+      ) : (
+        <div key={k} className={`step ${s.type}`}>{s.type === "thinking" ? "💭 " : "💬 "}{s.text}</div>
+      ))}
+      {!d.steps && d.tools?.length > 0 && <div className="small">tools: {d.tools.join(" → ")}</div>}
+      {d.reason && <div className="small">Reason: {d.reason}</div>}
+      {d.path_reason && <div className="small">Path: {d.path_reason}</div>}
+      {d.explanation?.supervisor && <div>{d.explanation.supervisor}</div>}
+    </div>
+  );
+}
+
 export default function Inspector({ card, onClose }: { card: any; onClose: () => void }) {
   const i = card.inspector ?? {};
   let body: any;
@@ -30,12 +58,8 @@ export default function Inspector({ card, onClose }: { card: any; onClose: () =>
       <h4>Binding constraints / shadow prices</h4>
       {i.binding?.length ? <Table rows={i.binding.slice(0, 12).map((b: any) => ({ constraint: b.name, kind: b.kind, plain: b.plain }))} /> : <div className="small">No binding constraint.</div>}</>);
   } else if (card.id === "agent") {
-    body = (i.trace?.length ? i.trace.slice().reverse().map((d: any, k: number) => (
-      <div key={k} style={{ marginBottom: 10 }}>
-        <b>{d.ts}</b> · trigger <code>{d.trigger}</code> → tools {d.tools.join(" → ")} → <b>{d.decision}</b> {d.version ? `(v${d.version})` : ""}
-        <div className="small">Narrator: {Object.values(d.narrator ?? {}).join("/")}</div>
-        {d.explanation?.supervisor && <div>{d.explanation.supervisor}</div>}
-      </div>)) : <div className="small">No decisions yet.</div>);
+    body = (<><p className="small">LLM: {i.llm}</p>
+      {i.trace?.length ? i.trace.slice().reverse().map((d: any, k: number) => <AgentRun key={k} d={d} />) : <div className="small">No decisions yet.</div>}</>);
   } else if (card.id === "backtest" && i.result) {
     const r = i.result;
     body = (<><p><b>{f(r.saving_pct)}%</b> cheaper at the same predicted residual risk (95% CI {f(r.ci[0])}–{f(r.ci[1])}%) over {r.n_heats} held-out heats; ${f(r.usd_per_t)}/t.</p>

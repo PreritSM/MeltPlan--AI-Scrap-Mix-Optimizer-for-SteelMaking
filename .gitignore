@@ -8,3 +8,6 @@ node_modules/
 dist/
 EAF Kaggle Dataset/
 Reference_Docs/
+# secrets
+.env
+*.env

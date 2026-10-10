@@ -9,9 +9,12 @@ class ElementKF:
         self.batch = np.array(mean, float)
         self.sd_batch = np.sqrt(np.diag(cov))
         self.e = self.batch.copy()
-        self.P = np.array(cov, float) + 1e-8 * np.eye(len(mean))
+        # bootstrap SDs are optimistic (e.g. 25A Cu +-0.005), which freezes the filter; floor the starting variance and the
+        # random walk at the same effective SD the drift flag uses (15% of the estimate, at least 0.005)
+        sd_eff = np.maximum(self.sd_batch, np.maximum(0.15 * np.abs(self.batch), 0.005))
+        self.P = np.array(cov, float) + np.diag(np.maximum(sd_eff ** 2 - np.diag(cov), 0.0)) + 1e-8 * np.eye(len(mean))
         self.R = sigma_eps ** 2
-        self.Q = q_frac * np.diag(np.maximum(np.diag(cov), 1e-8))
+        self.Q = q_frac * np.diag(sd_eff ** 2)
 
     def update(self, x: np.ndarray, y: float) -> float:
         """x: tonnes per group, y: c*B - H*c_prev (wt% t). Returns the normalised prediction error (z-score)."""

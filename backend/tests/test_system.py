@@ -51,16 +51,19 @@ def test_narrator_faithfulness():
     assert not narrator.faithful("Saved 17 dollars.", facts)
 
 
-def test_scenario_drift_triggers_replan_and_shifts_25a():
+def test_scenario_drift_triggers_replan_and_shifts_to_iron_units():
+    """SIMULATED: a copper-heavy 3A (shredded) lot. Lab results go above the limit, the agent re-plans, and the open heats
+    move from 3A to clean iron units (the brief's "shredded looks more copper-heavy; shifted to pig iron")."""
     w = World("SIMULATED")
     w.make_plan(); w.approve(); w.release()
-    base = np.mean([h.group_t.get("SCRAP_25A_3ACH", 0) for h in w.current_plan().heats])
-    for _ in range(14):
+    base = w.current_plan()
+    mean = lambda p, g: np.mean([h.group_t.get(g, 0) for h in p.heats[-4:]])
+    for _ in range(8):
         w.step_heat()
     reps = [d for d in w.decisions if d["decision"] == "replan"]
     assert reps and w.current_plan().version >= 2
-    assert np.mean([h.group_t.get("SCRAP_25A_3ACH", 0) for h in w.current_plan().heats[-5:]]) < base
-    assert any("25A" in m["group"] for d in reps for m in d["facts"]["moves"])
+    assert mean(w.current_plan(), "IRON_UNITS") > mean(base, "IRON_UNITS") and mean(w.current_plan(), "SCRAP_3A") < mean(base, "SCRAP_3A")
+    assert w.kf["cu"].e[0] > w.kf["cu"].batch[0]          # the filter attributes the extra copper to 3A
 
 
 def test_sanity_identity_frozen_mix_reproduces_cost():

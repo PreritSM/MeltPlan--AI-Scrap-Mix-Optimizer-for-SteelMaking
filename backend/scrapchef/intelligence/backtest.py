@@ -10,8 +10,8 @@ import sys
 
 import numpy as np
 
-from scrapchef.data.features import split_heats
-from scrapchef.data.store import GROUPS, ROOT, recipe_bounds
+from scrapchef.data.features import heel_chem, split_heats
+from scrapchef.data.store import GROUPS, ROOT, heat_table, recipe_bounds
 from .estimator.massbalance import build
 from .optimizer.evaluate import Z_FLOOR, z_hist
 from .optimizer.model import ELS, make_context, predict_heat, solve, z_of
@@ -21,8 +21,10 @@ def run(price_noise: float = 0.0, seed: int = 0, max_heats: int | None = None):
     rng = np.random.default_rng(seed)
     if price_noise:
         ctx.prices = ctx.prices * rng.uniform(1 - price_noise, 1 + price_noise, len(GROUPS))
-    ds = {el: build(el) for el in ELS}
-    d = ds["cu"]
+    d = build("cu")
+    # heel chemistry by heatid: element designs drop different heats (e.g. a missing Sn), so row positions do not line up
+    ht = heat_table()
+    heels = {el: dict(zip(ht.heatid, heel_chem(ht, el)[0])) for el in ELS}
     n = len(d.y)
     test = range(split_heats(d.heats)[1], n)
     bounds0 = recipe_bounds()
@@ -34,7 +36,7 @@ def run(price_noise: float = 0.0, seed: int = 0, max_heats: int | None = None):
         T = float(ctx.yields @ x)
         if T < 80:
             continue
-        heel = {el: float(ds[el].c_prev[i]) if el in ds and i < len(ds[el].c_prev) else ctx.heel_c0[el] for el in ELS}
+        heel = {el: float(heels[el][d.heats.heatid[i]]) for el in ELS}
         # availability proxy (A10): per-group stock = max usage within +/-1 day
         ts = d.heats.start_ts
         near = (ts >= ts[i] - np.timedelta64(1, "D")) & (ts <= ts[i] + np.timedelta64(1, "D"))

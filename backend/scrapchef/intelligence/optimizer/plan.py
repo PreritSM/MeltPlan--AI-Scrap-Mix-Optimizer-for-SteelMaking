@@ -39,12 +39,12 @@ def _baskets(group_t: dict[str, float], grab_t: float, splits, profile) -> list[
 
 def build_plan(ctx: Context, taps: list[float], plan_id: str, version: int = 1, mode: str = "chance",
                alpha: float = 0.05, spec_class: str = "plant_strict", parent: int | None = None,
-               created_by: str = "agent", frozen: dict | None = None, ts: str | None = None) -> PlanVersion | None:
+               created_by: str = "agent", frozen: dict | None = None, ts: str | None = None, slot0: int = 1) -> PlanVersion | None:
+    """slot0: plan slot of taps[0] (re-plans solve only the heats that are not yet tapped)."""
     res = solve(ctx, taps, mode, alpha, frozen=frozen)
     if res["x"] is None:
         return None
     mill, splits, profile = cfg("mill"), code_split(), basket_profile()
-    energy_k = float(ctx.energy_k.mean()) if len(ctx.energy_k) else 0.0
     heats = []
     for h, T in enumerate(taps):
         x = np.maximum(res["x"][h], 0)
@@ -52,13 +52,13 @@ def build_plan(ctx: Context, taps: list[float], plan_id: str, version: int = 1, 
         pred = predict_heat(ctx, x, T, res["heel"][h])
         mat, en = float(ctx.prices @ x), float(ctx.energy_k @ x)
         heats.append(HeatPlan(
-            slot=h + 1, spec_class=spec_class, target_tap_t=T, frozen=bool(frozen and h in frozen), group_t=gt,
+            slot=h + slot0, spec_class=spec_class, target_tap_t=T, frozen=bool(frozen and h in frozen), group_t=gt,
             baskets=_baskets(gt, mill["grab_size_t"], splits, profile),
             predicted={e: ElementPrediction(mean=p["mean"], p95=p["p95"], limit=p["limit"], p_exceed=p["p_exceed"])
                        for e, p in pred.items()},
             cost=CostBreakdown(material=mat, energy=en, total=mat + en, per_t=(mat + en) / T)))
-    binding = [Constraint(name=f"{d['key']}@{d['heat']}", kind=d["kind"], dual=d["dual"],
-                          dual_units="$ per unit RHS", plain=d["plain"]) for d in duals(ctx, res)]
+    binding = [Constraint(name=f"{d['key']}@{d['heat'] + slot0}" if d["heat"] is not None else f"{d['key']}@horizon", kind=d["kind"], dual=d["dual"],
+                          dual_units="$ per unit RHS", plain=d["plain"]) for d in duals(ctx, res, slot0)]
     return PlanVersion(plan_id=plan_id, version=version, parent_version=parent,
                        created_ts=ts or datetime.now().isoformat(), created_by=created_by, mode=mode,
                        alpha=alpha, heats=heats, binding=binding)

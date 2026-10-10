@@ -12,7 +12,6 @@ function summarize(o: any) {
 
 function TopBar() {
   const { state, act, playing, setPlaying } = useSim();
-  const [speed] = useState(1);
   if (!state) return null;
   const sim = state.mode === "SIMULATED";
   return (
@@ -22,6 +21,9 @@ function TopBar() {
       <button className="primary" onClick={() => act("/api/sim/plan")} title="Advance to the next 06:00 and plan the next 24 h">▶| Plan 06:00</button>
       <button onClick={() => setPlaying(!playing)} aria-label={playing ? "pause" : "play"}>{playing ? "⏸" : "▶"}</button>
       <button onClick={() => act("/api/sim/step_heat")} disabled={!state.plan_status}>Step heat</button>
+      <button onClick={() => act("/api/sim/inbox", {})} disabled={!state.plan_status} title="Scenario (MOCK): logistics emails that 3A is short">📧 Supplier email</button>
+      <span className={`chip ${state.agent?.busy ? "busy" : state.agent?.available ? "shadow" : "sim"}`} title={state.agent?.llm}>
+        {state.agent?.busy ? "Agent working…" : state.agent?.available ? "Agent: LLM" : "Agent: fallback"}</span>
       <select aria-label="mode" value={state.mode} onChange={(e) => act("/api/sim/reset", { mode: e.target.value })}>
         <option value="SHADOW_REPLAY">Shadow replay (real heats)</option><option value="SIMULATED">Simulated drift scenario</option>
       </select>
@@ -33,7 +35,7 @@ function TopBar() {
         })}
       </div>
       <div className="legend">{state.legend.map((p: string) => <Badge key={p} p={p} />)}</div>
-      <span className="small">{speed}× · heat {state.cursor}/{state.n_replay}</span>
+      <span className="small">heat {state.cursor}/{state.n_replay}</span>
     </div>
   );
 }

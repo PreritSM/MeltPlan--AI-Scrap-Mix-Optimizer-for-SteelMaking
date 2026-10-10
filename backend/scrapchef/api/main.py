@@ -5,7 +5,7 @@ import asyncio
 import json
 import traceback
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -17,7 +17,7 @@ from scrapchef.sim.world import World
 
 app = FastAPI(title="Mini-ScrapChef")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
-world = World("SHADOW_REPLAY")
+world = World("SHADOW_REPLAY", agent_async=True)  # agent runs in a worker so the UI stays responsive
 
 
 def guard(fn):
@@ -42,14 +42,26 @@ def phone(role: str):
     return world.phone(role)
 
 
+def resume_seq(store, last_event_id: str | None, since: int | None) -> int:
+    """Where an SSE connection starts. Ids are '<epoch>:<seq>'; an id from an older store (reset or server restart) restarts at 0.
+    A fresh connection without an id or `since` starts at the latest event, so history is not replayed as unread."""
+    if last_event_id:
+        epoch, _, seq = last_event_id.partition(":")
+        return int(seq) if epoch == store.epoch and seq.isdigit() else 0
+    return since if since is not None else store.last_seq()
+
+
 @app.get("/api/events")
-async def events(since: int = 0):
+async def events(request: Request, since: int | None = None):
     async def gen():
-        seq = since
+        store = world.store
+        seq = resume_seq(store, request.headers.get("last-event-id"), since)
         while True:
-            for ev in world.store.events_since(seq):
+            if world.store is not store:  # reset replaced the store and its seq restarted at 1
+                store, seq = world.store, 0
+            for ev in store.events_since(seq):
                 seq = ev["seq"]
-                yield f"id: {seq}\ndata: {json.dumps(ev)}\n\n"
+                yield f"id: {store.epoch}:{seq}\ndata: {json.dumps(ev)}\n\n"
             yield ": keepalive\n\n"
             await asyncio.sleep(0.4)
     return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
@@ -57,8 +69,8 @@ async def events(since: int = 0):
 
 class ResetBody(BaseModel):
     mode: str = "SHADOW_REPLAY"
-    drift_factor: float = 12.0
-    drift_group: str = "SCRAP_25A_3ACH"
+    drift_factor: float = 1.5           # SIMULATED: a copper-heavy 3A (shredded) lot
+    drift_group: str = "SCRAP_3A"
 
 
 @app.post("/api/sim/reset")
@@ -105,9 +117,13 @@ def edit(b: EvalBody):
     return guard(lambda: dict(version=world.edit(b.slot, b.group_t).version))
 
 
+class ApproveBody(BaseModel):
+    option: str | None = None   # an agent alternative's candidate_id; None approves the live version
+
+
 @app.post("/api/plan/approve")
-def approve():
-    return guard(lambda: (world.approve(), dict(ok=True))[1])
+def approve(b: ApproveBody | None = None):
+    return guard(lambda: (world.approve(option=b.option if b else None), dict(ok=True))[1])
 
 
 class ReasonBody(BaseModel):
@@ -145,6 +161,37 @@ def shortage(b: ShortBody):
     return guard(lambda: dict(decision=(world.report_shortage(b.group) or {}).get("decision")))
 
 
+class IssueBody(BaseModel):
+    role: str = "shift_leader"
+    text: str
+
+
+@app.post("/api/report/issue")
+def issue(b: IssueBody):
+    """Free-text operational issue; the agent interprets it (async: the result arrives as events)."""
+    return guard(lambda: world.report_issue(b.role, b.text) or dict(queued=True))
+
+
+class InboxBody(BaseModel):
+    text: str = ""
+
+
+@app.post("/api/sim/inbox")
+def inbox(b: InboxBody):
+    """Scenario: a MOCK supplier / logistics email arrives in the agent's inbox."""
+    def run():
+        text = b.text or default_supplier_email()
+        world.notify("supervisor", f"Inbound email (logistics): {text}", sender="logistics")
+        return world.dispatch("inbox", text, "logistics") or dict(queued=True)
+    return guard(run)
+
+
+def default_supplier_email() -> str:
+    """Scripted demo email: the yard can supply only part of the 3A the open heats need (MOCK)."""
+    from scrapchef.sim.scenario import supplier_email
+    return supplier_email(world)
+
+
 class ChatBody(BaseModel):
     role: str
     text: str
@@ -152,13 +199,8 @@ class ChatBody(BaseModel):
 
 @app.post("/api/chat")
 def chat(b: ChatBody):
-    def run():
-        from scrapchef.intelligence.agent.chat import answer
-        a = answer(world, b.role, b.text)
-        world.chat += [dict(who=b.role, text=b.text, ts=world._ts()), dict(who="agent", text=a, ts=world._ts())]
-        world._emit("chat", {"role": b.role}, ["process", b.role])
-        return dict(answer=a)
-    return guard(run)
+    """Questions go to the agent; the answer arrives in the role's chat thread (async)."""
+    return guard(lambda: world.ask(b.role, b.text) or dict(queued=True))
 
 
 @app.post("/api/email/read")

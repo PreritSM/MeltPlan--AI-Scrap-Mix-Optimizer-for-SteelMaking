@@ -136,8 +136,8 @@ def solve(ctx: Context, taps: list[float], mode: str = "chance", alpha: float = 
     return res
 
 
-def duals(ctx: Context, res) -> list[dict]:
-    """Constraint duals converted to plain units (shadow prices)."""
+def duals(ctx: Context, res, slot0: int = 1) -> list[dict]:
+    """Constraint duals converted to plain units (shadow prices). slot0 = plan slot of the first solved heat."""
     out = []
     for kind, h, key, con in res["tagged"]:
         d = con.dual_value
@@ -148,8 +148,8 @@ def duals(ctx: Context, res) -> list[dict]:
             T = res["taps"][h]; B = T + ctx.heel_t
             per_001 = d * 0.01 * B / T      # $ per t steel per 0.01 wt% of extra headroom
             out.append(dict(kind=kind, heat=h, key=key, dual=d, usd_per_t_per_0p01pct=per_001,
-                            plain=f"Heat {h+1}: each extra 0.01% {key.upper()} headroom is worth ${per_001:.2f}/t"))
+                            plain=f"Heat {h + slot0}: each extra 0.01% {key.upper()} headroom is worth ${per_001:.2f}/t"))
         elif kind == "inventory":
             out.append(dict(kind=kind, heat=None, key=key, dual=d, usd_per_t_per_0p01pct=None,
-                            plain=f"Each extra tonne of {key} would save ${-d:.2f}"))
+                            plain=f"Each extra tonne of {key} would save ${abs(d):.2f}"))  # cvxpy dual of a <= row is >= 0
     return out

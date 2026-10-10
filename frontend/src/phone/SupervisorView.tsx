@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useSim } from "../store/sim";
 import { post } from "../api/client";
 import { Headroom } from "../components/Headroom";
+import { AgentMessages, ChatThread } from "../components/Agent";
 
 const money = (v: number) => `$${v.toFixed(2)}`;
 
@@ -39,7 +40,6 @@ export default function SupervisorView() {
   const { phone, state, act } = useSim();
   const v = phone.supervisor; const plan = v?.plan;
   const [edit, setEdit] = useState(false); const [slot, setSlot] = useState(1);
-  const [q, setQ] = useState(""); const [ans, setAns] = useState<string[]>([]);
   const groups = useMemo(() => state?.groups ?? [], [state]);
   if (!plan?.heats) return <div className="small">No plan yet. Use “Plan 06:00” in the Process View.</div>;
   if (edit) return <ControlSuite plan={plan} groups={groups} onClose={() => setEdit(false)} />;
@@ -54,7 +54,16 @@ export default function SupervisorView() {
       Optimiser at that same risk: {money(plan.cost.risk_match.matched_per_t)}/t ({plan.cost.risk_match.matched_per_t - plan.cost.risk_match.hist_per_t >= 0 ? "+" : ""}{(plan.cost.risk_match.matched_per_t - plan.cost.risk_match.hist_per_t).toFixed(2)}).
       Plan vs that: {plan.cost.per_t - plan.cost.risk_match.matched_per_t >= 0 ? "+" : ""}{(plan.cost.per_t - plan.cost.risk_match.matched_per_t).toFixed(2)}/t for the 95% limits.</div>}
     <div className="small">{plan.summary.n_heats} heats · {Object.entries(plan.summary.tonnes_by_group).map(([g, t]: any) => `${g.replace("SCRAP_", "")} ${t}t`).join(" · ")}</div>
-    {plan.explanation && <div className="mail"><div className="small">Agent</div>{plan.explanation}</div>}
+    {plan.explanation && <div className="mail msg"><div className="small">Agent</div>{plan.explanation}</div>}
+    <AgentMessages items={v.messages} />
+    {plan.alternatives?.length > 0 && <div><div className="small"><b>Agent's alternatives</b> (approve one instead of v{plan.version})</div>
+      {plan.alternatives.map((a: any) => (<div key={a.candidate_id} className="opt">
+        <div className="row" style={{ margin: 0 }}><b>Option {a.label}</b><span>{money(a.cost_per_t)}/t</span><span className="sp" />
+          <button disabled={!canApprove} onClick={() => act("/api/plan/approve", { option: a.candidate_id })}>Approve {a.label}</button></div>
+        <div className="small">{[a.params.relax_recipe_bounds && "relaxed recipe bounds", a.params.spec_class !== "plant_strict" && `spec ${a.params.spec_class}`,
+          a.params.alpha !== 0.05 && `risk ${(a.params.alpha * 100).toFixed(0)}%`].filter(Boolean).join(" · ") || "default settings"}
+          {" · worst Cu P(exceed) "}{(a.worst_p_exceed.cu * 100).toFixed(1)}%</div>
+      </div>))}</div>}
     <div className="row"><b>Headroom, heat</b>
       <select value={slot} onChange={(e) => setSlot(+e.target.value)} aria-label="heat">{plan.heats.map((h: any) => <option key={h.slot} value={h.slot}>{h.slot}</option>)}</select></div>
     {Object.entries(heat.headroom).map(([el, p]: any) => <Headroom key={el} el={el} p={p} />)}
@@ -62,12 +71,10 @@ export default function SupervisorView() {
     {plan.binding.length ? plan.binding.slice(0, 3).map((b: any, i: number) => <div key={i} className="small">• {b.plain}</div>) : <div className="small">None binding.</div>}
     {v.backtest && <div className="small" style={{ marginTop: 6 }}>Back-test: {v.backtest.saving_pct.toFixed(1)}% cheaper at same risk (ASSUMED prices)</div>}
     <div className="row">
-      <button className="primary" disabled={!canApprove} onClick={() => act("/api/plan/approve")}>Approve</button>
+      <button className="primary" disabled={!canApprove} onClick={() => act("/api/plan/approve", {})}>Approve</button>
       <button onClick={() => setEdit(true)}>Edit</button>
       <button className="danger" disabled={["RELEASED", "LOADING", "DONE"].includes(plan.status)} onClick={() => act("/api/plan/reject", { reason: "Supervisor requested a new plan" })}>Reject</button>
     </div>
-    <input type="text" placeholder="Ask the agent (why / cost / risk)…" value={q} onChange={(e) => setQ(e.target.value)} />
-    <div className="row"><button disabled={!q} onClick={async () => { const r = await act("/api/chat", { role: "supervisor", text: q }); setAns([...ans, r.answer]); setQ(""); }}>Ask</button></div>
-    {ans.slice(-3).map((a, i) => <div key={i} className="mail">{a}</div>)}
+    <ChatThread role="supervisor" items={v.chat} placeholder="Ask the agent (why / cost / what if)…" />
   </div>);
 }
