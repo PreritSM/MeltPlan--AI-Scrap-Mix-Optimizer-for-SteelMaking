@@ -1,11 +1,11 @@
-"""Regression tests for the replay, event-stream and versioning fixes."""
+"""Regression tests for the replay, event-stream, versioning and tap/yield fixes."""
 import numpy as np
 import pytest
 
 from scrapchef.act.plans import PlanStore
 from scrapchef.api.main import resume_seq
 from scrapchef.data.features import heel_chem
-from scrapchef.data.store import GROUPS, heat_table
+from scrapchef.data.store import GROUPS, cfg, heat_table
 from scrapchef.sim.world import World
 
 
@@ -51,3 +51,25 @@ def test_reject_continues_version_numbering_and_keeps_history():
     assert w.current_plan().parent_version == 2
     with pytest.raises(Exception):                 # a stored version can never be overwritten
         w.store.save(w.current_plan(), "x", "t")
+
+
+def test_plan_editor_and_tap_are_consistent():
+    """Tap tolerance fix (Tap_tol_error.md): plans make the target tap, an unedited mix re-evaluates with no cost change and no
+    violation, chemistry and cost per t use the tap the charge makes, and extra iron units dilute Cu."""
+    w = World("SHADOW_REPLAY")
+    p = w.make_plan()
+    h = p.heats[0]
+    assert abs(h.tap_t - h.target_tap_t) <= w.ctx.tap_tol + 1e-3
+    ev = w.evaluate(1, {g: round(v, 3) for g, v in h.group_t.items()})
+    assert abs(ev["delta_cost_per_t"]) < 0.01 and ev["violations"] == []
+    more = dict(h.group_t, IRON_UNITS=h.group_t.get("IRON_UNITS", 0.0) + 40)
+    assert w.evaluate(1, more)["predicted"]["cu"]["mean"] < h.predicted["cu"].mean
+    assert w.solve_candidate({})[1]["delta_per_t"] == 0.0   # re-solving unchanged inputs is not a "saving"
+
+
+def test_estimator_and_optimizer_share_one_yield_model():
+    from scrapchef.data.store import group_yields
+    from scrapchef.intelligence.estimator.massbalance import build
+    d = build("cu")
+    assert np.allclose(d.B - d.X @ group_yields(), cfg("mill")["heel_t"])
+    assert abs(np.median(d.X @ group_yields()) - cfg("mill")["target_tap_t"]) < 1.0   # planned tap = what the mill's charges make

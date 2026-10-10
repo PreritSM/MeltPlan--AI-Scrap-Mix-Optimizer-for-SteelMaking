@@ -8,7 +8,7 @@ import cvxpy as cp
 import numpy as np
 from scipy.stats import norm
 
-from scrapchef.data.store import GROUPS, ROOT, cfg, last_chem, recipe_bounds
+from scrapchef.data.store import GROUPS, ROOT, cfg, group_yields, last_chem, recipe_bounds
 
 ELS = ["cu", "sn", "ni", "mo"]
 
@@ -38,21 +38,20 @@ class Context:
     energy_k: np.ndarray = field(default_factory=lambda: np.zeros(len(GROUPS)))  # $/t input
     bounds: dict[str, tuple[float, float]] = field(default_factory=recipe_bounds)
     heel_t: float = 17.5
-    tap_tol: float = 1.0
+    tap_tol: float = 0.05
     heel_c0: dict[str, float] = field(default_factory=last_chem)
 
 
 def make_context(spec_class: str | None = None, inventory=None, variant: str = "final") -> Context:
-    gm, pr, sp = cfg("grade_map"), cfg("prices"), cfg("specs")
+    pr, sp, mill = cfg("prices"), cfg("specs"), cfg("mill")
     en = ROOT / "data" / "energy.json"
     energy_k = np.array(json.loads(en.read_text())["k_usd_per_t"]) if en.exists() else np.zeros(len(GROUPS))
-    cats = gm["categories"]
     return Context(
         est=Estimates.load(variant), energy_k=energy_k,
         prices=np.array([pr["groups"][g] for g in GROUPS], float),
-        yields=np.array([cats[gm["groups"][g]["category"]]["yield"] for g in GROUPS], float),
+        yields=group_yields(),
         limits=sp["classes"][spec_class or sp["default"]],
-        inventory=inventory, heel_t=cfg("mill")["heel_t"],
+        inventory=inventory, heel_t=mill["heel_t"], tap_tol=mill["tap_tol_t"],
     )
 
 
@@ -64,9 +63,15 @@ def chol(cov: np.ndarray) -> np.ndarray:
     return np.linalg.cholesky(cov + 1e-12 * np.eye(len(cov)))
 
 
-def predict_heat(ctx: Context, x: np.ndarray, tap_t: float, heel_c: dict[str, float]) -> dict[str, dict[str, float]]:
-    """Mean, sd, p95, exceedance probability of final chemistry (wt %) for charge x (t per group)."""
-    B = tap_t + ctx.heel_t
+def tap_of(ctx: Context, x: np.ndarray) -> float:
+    """Tap the charge actually makes (t steel)."""
+    return float(ctx.yields @ x)
+
+
+def predict_heat(ctx: Context, x: np.ndarray, tap_t: float | None, heel_c: dict[str, float]) -> dict[str, dict[str, float]]:
+    """Mean, sd, p95, exceedance probability of final chemistry (wt %) for charge x (t per group).
+    tap_t=None uses the tap the charge makes (yields . x): chemistry and cost then follow the actual steel, not a target."""
+    B = (tap_of(ctx, x) if tap_t is None else tap_t) + ctx.heel_t
     out = {}
     for el in ELS:
         mean = (ctx.heel_t * heel_c[el] + ctx.est.mu[el] @ x) / B

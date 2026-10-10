@@ -67,11 +67,17 @@ class HeatPlan(BaseModel):
     slot: int
     spec_class: str
     target_tap_t: float
+    tap_t: float | None = None      # tap the planned charge makes (yields . x); chemistry and cost per t use it
     frozen: bool = False
     group_t: dict[str, float]
     baskets: list[Basket]
     predicted: dict[str, ElementPrediction]
     cost: CostBreakdown
+
+    @property
+    def steel_t(self) -> float:
+        """Steel this heat makes: the charge's tap when known (plans saved before D19 fall back to the target)."""
+        return self.tap_t if self.tap_t is not None else self.target_tap_t
 
 
 PlanStatus = Literal["PROPOSED", "EMAILED", "SUPERVISOR_APPROVED", "RELEASED", "LOADING", "DONE", "SUPERSEDED", "REJECTED"]

@@ -30,7 +30,7 @@ class MockDeliveries:
 
 class MockSchedule:
     def __init__(self, n_heats: int, tap: float | None = None):
-        self.n, self.tap = n_heats, tap or cfg("mill")["rated_tap_t"]
+        self.n, self.tap = n_heats, tap or cfg("mill")["target_tap_t"]
 
     def horizon(self, ts: str) -> list[ScheduledHeat]:
         t0 = datetime.fromisoformat(ts)

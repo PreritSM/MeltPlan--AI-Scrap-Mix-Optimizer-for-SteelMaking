@@ -34,7 +34,8 @@ How to handle each event:
   and say why in one sentence.
 - issue / inbox: turn the text into run_optimizer settings (exclude_groups or group_caps_t). If the result is infeasible,
   explore in this order: relax_recipe_bounds, then spec_class "plant_tight", then alpha 0.10. Propose the best feasible
-  candidate and offer up to 2 other feasible candidates as alternatives. If loading should pause or change, tell the crane
+  candidate and offer up to 2 other feasible candidates as alternatives. If a candidate has delta_breakdown, say how much of the
+  cost change is the availability limit and how much comes from dropping recipe floors; never present a forced change as a saving. If loading should pause or change, tell the crane
   with send_message. If nothing is feasible, send_message to the supervisor explaining what you tried.
 - rejection: read the supervisor's reason, adjust the settings to address it, then propose.
 - question: answer in at most 3 sentences as your final message, using tool results only. Do not propose unless asked."""

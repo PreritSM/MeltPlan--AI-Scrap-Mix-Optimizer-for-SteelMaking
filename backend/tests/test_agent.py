@@ -78,6 +78,21 @@ def test_fallback_handles_the_supplier_email_with_costed_options(world):
     assert runs[0]["result"]["status"] == "infeasible" and runs[1]["result"]["status"] == "optimal"
     assert world.current_plan().version == rec["version"] and world.caps["SCRAP_3A"] > 0
     assert any(m["role"] == "crane" for m in rec["messages"])
+    # the forced change is split: the shortage costs money, the apparent saving is the dropped 3A floor
+    cand = world.candidates[[s for s in runs if s["result"]["status"] == "optimal"][0]["result"]["candidate_id"]]["summary"]
+    b = cand["delta_breakdown"]
+    assert b["availability_limits_per_t"] >= 0 and "SCRAP_3A" in cand["recipe_floors_dropped"]
+    assert abs(b["availability_limits_per_t"] + b["dropping_recipe_floors_per_t"] - cand["delta_per_t"]) <= 0.02
+    assert "availability limit" in rec["explanation"]["supervisor"]
+
+
+def test_crane_hold_message_expires_on_release(world):
+    loop.handle(world, dict(kind="inbox", text=supplier_email(world), role="logistics", ts=world._ts()), world.llm)
+    assert any("hold" in m["text"].lower() for m in world.phone("crane")["messages"])
+    world.approve()
+    world.release()
+    assert world.phone("crane")["messages"] == []
+    assert world.messages["crane"][0]["expired"].endswith("released")   # kept in the log
 
 
 def test_llm_loop_explores_proposes_and_offers_an_alternative(world):

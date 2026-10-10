@@ -9,7 +9,7 @@ import numpy as np
 from scrapchef.contracts.models import (Basket, Constraint, CostBreakdown, ElementPrediction, HeatPlan, LoadItem,
                                         PlanVersion)
 from scrapchef.data.store import GROUPS, basket_profile, cfg, code_split
-from .model import Context, ELS, duals, predict_heat, solve
+from .model import Context, ELS, duals, predict_heat, solve, tap_of
 
 
 def _baskets(group_t: dict[str, float], grab_t: float, splits, profile) -> list[Basket]:
@@ -49,14 +49,15 @@ def build_plan(ctx: Context, taps: list[float], plan_id: str, version: int = 1, 
     for h, T in enumerate(taps):
         x = np.maximum(res["x"][h], 0)
         gt = {g: round(float(v), 3) for g, v in zip(GROUPS, x) if v > 1e-3}
-        pred = predict_heat(ctx, x, T, res["heel"][h])
+        tap = tap_of(ctx, x)
+        pred = predict_heat(ctx, x, None, res["heel"][h])
         mat, en = float(ctx.prices @ x), float(ctx.energy_k @ x)
         heats.append(HeatPlan(
-            slot=h + slot0, spec_class=spec_class, target_tap_t=T, frozen=bool(frozen and h in frozen), group_t=gt,
+            slot=h + slot0, spec_class=spec_class, target_tap_t=T, tap_t=round(tap, 3), frozen=bool(frozen and h in frozen), group_t=gt,
             baskets=_baskets(gt, mill["grab_size_t"], splits, profile),
             predicted={e: ElementPrediction(mean=p["mean"], p95=p["p95"], limit=p["limit"], p_exceed=p["p_exceed"])
                        for e, p in pred.items()},
-            cost=CostBreakdown(material=mat, energy=en, total=mat + en, per_t=(mat + en) / T)))
+            cost=CostBreakdown(material=mat, energy=en, total=mat + en, per_t=(mat + en) / tap)))
     binding = [Constraint(name=f"{d['key']}@{d['heat'] + slot0}" if d["heat"] is not None else f"{d['key']}@horizon", kind=d["kind"], dual=d["dual"],
                           dual_units="$ per unit RHS", plain=d["plain"]) for d in duals(ctx, res, slot0)]
     return PlanVersion(plan_id=plan_id, version=version, parent_version=parent,
@@ -69,7 +70,7 @@ def heat_from_groups(ctx: Context, slot: int, tap_t: float, group_t: dict[str, f
     from .evaluate import evaluate_mix
     ev = evaluate_mix(ctx, group_t, tap_t, heel)
     gt = {g: round(float(v), 3) for g, v in group_t.items() if v > 1e-3}
-    return HeatPlan(slot=slot, spec_class=spec_class, target_tap_t=tap_t, frozen=frozen, group_t=gt,
+    return HeatPlan(slot=slot, spec_class=spec_class, target_tap_t=tap_t, tap_t=round(ev["tap_actual_t"], 3), frozen=frozen, group_t=gt,
                     baskets=_baskets(gt, cfg("mill")["grab_size_t"], code_split(), basket_profile()),
                     predicted={e: ElementPrediction(mean=p["mean"], p95=p["p95"], limit=p["limit"], p_exceed=p["p_exceed"]) for e, p in ev["predicted"].items()},
-                    cost=CostBreakdown(material=ev["cost"]["material"], energy=ev["cost"]["energy"], total=ev["cost"]["total"], per_t=ev["cost"]["total"] / tap_t))
+                    cost=CostBreakdown(material=ev["cost"]["material"], energy=ev["cost"]["energy"], total=ev["cost"]["total"], per_t=ev["cost"]["per_t"]))

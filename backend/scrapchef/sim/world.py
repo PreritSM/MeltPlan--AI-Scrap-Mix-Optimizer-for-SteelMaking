@@ -31,6 +31,13 @@ from scrapchef.read.mock.adapters import MockHandling, MockInventory, MockSchedu
 ISO = "%Y-%m-%dT%H:%M:%S"
 
 
+def _with(ctx, **kw):
+    c = copy.copy(ctx)
+    for k, v in kw.items():
+        setattr(c, k, v)
+    return c
+
+
 class World:
     def __init__(self, mode: str = "SHADOW_REPLAY", agent_async: bool = False, llm: LLM | None = None):
         self.lock = threading.RLock()
@@ -138,7 +145,7 @@ class World:
     def _inventory(self, idx: list[int]) -> np.ndarray:
         """MOCK yard stock per group: 1.3 x (recipe upper-bound share x horizon charge), at least 1.15 x observed usage.
         Stock only binds when a shortage is reported (the real feed will replace this)."""
-        horizon_t = len(idx) * self.mill["rated_tap_t"] / 0.92
+        horizon_t = len(idx) * self.mill["target_tap_t"] / float(np.mean(self.ctx.yields))
         ub = np.array([self.ctx.bounds[g][1] for g in GROUPS])
         usage = self.replay.iloc[idx][GROUPS].sum().to_numpy()
         stock = np.maximum(1.3 * ub * horizon_t, 1.15 * usage)
@@ -171,11 +178,12 @@ class World:
             if plan is None:
                 return None
             self.plan_id, self.plan_heat0 = date, idx[0]
+            self._expire_messages(list(self.messages), "new daily plan")
             self.progress = {}
             self.released_version = None
             self.store.save(plan, "agent", self._ts(), trigger)
             facts = dict(decision="new_plan", version=version, trigger_text="Daily 06:00 plan.", n_heats=len(plan.heats), moves=[],
-                         cost_delta_per_t=0.0, new_per_t=sum(h.cost.total for h in plan.heats) / sum(taps), reason="", binding=(plan.binding[0].plain if plan.binding else ""))
+                         cost_delta_per_t=0.0, new_per_t=sum(h.cost.total for h in plan.heats) / sum(h.steel_t for h in plan.heats), reason="", binding=(plan.binding[0].plain if plan.binding else ""))
             rationale = ("Lowest-cost mix meeting every element limit with 95% confidence, within the mill's demonstrated recipe range."
                          + (f" {plan.binding[0].plain}." if plan.binding else ""))
             self._send_email(plan, rationale)
@@ -216,13 +224,13 @@ class World:
             return None
         h = plan.heats[slot - 1]
         x = np.array([h.group_t.get(g, 0.0) for g in GROUPS])
-        B = h.target_tap_t + self.mill["heel_t"]
+        B = h.steel_t + self.mill["heel_t"]
         meas = {}
         for el in ELS:
             noise = self.rng.normal(0, self.ctx.est.sigma_eps[el])
             meas[el] = max(0.0, (self.mill["heel_t"] * self.heel[el] + self.e_true[el] @ x + noise) / B)
         self.clock += timedelta(minutes=60)
-        res = self._reveal(x, meas, B, f"SIM-{slot}", actual_tap=h.target_tap_t)
+        res = self._reveal(x, meas, B, f"SIM-{slot}", actual_tap=h.steel_t)
         self.sim_step += 1
         self._after_heat(res)
         return res
@@ -307,7 +315,7 @@ class World:
             heel = {el: ev["predicted"][el]["mean"] for el in ELS}
             if j in frozen:
                 continue
-            cost += ev["cost"]["total"]; steel += h.target_tap_t
+            cost += ev["cost"]["total"]; steel += ev["tap_actual_t"]
             for el in ELS:
                 risk[el] = max(risk[el], ev["predicted"][el]["p_exceed"])
         return dict(open_slots=[h.slot for j, h in enumerate(sub) if j not in frozen],
@@ -346,9 +354,10 @@ class World:
             for g, cap in caps.items():
                 i = GROUPS.index(g)
                 inv[i] = min(inv[i], cap + frozen_use[i])
-            c.inventory = inv
-            new = build_plan(c, [h.target_tap_t for h in sub], plan.plan_id, version=0, alpha=alpha, spec_class=spec,
-                             parent=plan.version, frozen=frozen, ts=self._ts(), slot0=sub[0].slot)
+            relax_floor = {g: round(lo, 3) for g, (lo, _) in self.ctx.bounds.items() if lo > 0} if params.get("relax_recipe_bounds") else {}
+            solve = lambda inventory: build_plan(_with(c, inventory=inventory), [h.target_tap_t for h in sub], plan.plan_id, version=0, alpha=alpha,
+                                                 spec_class=spec, parent=plan.version, frozen=frozen, ts=self._ts(), slot0=sub[0].slot)
+            new = solve(inv)
             self.n_candidates += 1
             cid = f"C{self.n_candidates}"
             echo = dict(exclude_groups=params.get("exclude_groups") or [], group_caps_t=params.get("group_caps_t") or {},
@@ -361,7 +370,7 @@ class World:
             full = new.model_copy(update=dict(heats=[h.model_copy(deep=True) for h in plan.heats[:start]] + new.heats))
             cur = self.open_eval(plan) or {}
             open_j = [j for j in range(len(sub)) if j not in frozen]
-            steel = sum(sub[j].target_tap_t for j in open_j)
+            steel = sum(new.heats[j].steel_t for j in open_j)
             cost = sum(new.heats[j].cost.total for j in open_j) / steel
             moves = {}
             for j in open_j:
@@ -374,6 +383,16 @@ class World:
                            tonnes_by_group={g: round(sum(new.heats[j].group_t.get(g, 0.0) for j in open_j), 1) for g in GROUPS},
                            worst_p_exceed={el: round(max(new.heats[j].predicted[el].p_exceed for j in open_j), 3) for el in ELS},
                            limits=c.limits, binding=[b.plain for b in new.binding[:3]])
+            if relax_floor and caps and summary["delta_per_t"] is not None:
+                # split the cost change: how much comes from dropping the recipe floors alone (same settings, no new caps),
+                # and how much from the availability limits; otherwise a shortage can look like a saving
+                ref = solve(np.maximum(self.base_inventory - used, 0.0))
+                if ref is not None:
+                    ref_cost = sum(ref.heats[j].cost.total for j in open_j) / sum(ref.heats[j].steel_t for j in open_j)
+                    summary["delta_breakdown"] = dict(dropping_recipe_floors_per_t=round(ref_cost - cur["cost_per_t"], 2),
+                                                      availability_limits_per_t=round(cost - ref_cost, 2))
+            if relax_floor:
+                summary["recipe_floors_dropped"] = relax_floor
             self.candidates[cid] = dict(plan=full, summary=summary, caps={g: v for g, v in caps.items()},
                                         base_version=plan.version, spec_class=spec, alpha=alpha)
             return full, summary
@@ -426,6 +445,14 @@ class World:
         with self.lock:
             self.messages.setdefault(role, []).append(dict(ts=self._ts(), sender=sender, text=text))
             self._emit("message", {"role": role, "text": text}, ["process", role])
+
+    def _expire_messages(self, roles, why: str):
+        """Agent notes are about a pending situation ('hold loading until the new list arrives'); once a plan is released or a new
+        day starts they are out of date. They stay in the log (Process View) but leave the phone screens."""
+        for r in roles:
+            for m in self.messages.get(r, []):
+                if not m.get("expired"):
+                    m["expired"] = why
 
     def post_chat(self, role: str, text: str, who: str = "agent"):
         with self.lock:
@@ -499,6 +526,7 @@ class World:
             self.store.transition(p, "RELEASED", actor, self._ts(), "released to cranes")
             self.released_version = p.version
             self.pending_banner = None
+            self._expire_messages(["crane"], f"v{p.version} released")
             self._emit("released", {"version": p.version}, ["process", "shift_leader", "crane"])
 
     def edit(self, slot: int, group_t: dict[str, float], actor="supervisor") -> PlanVersion:
@@ -508,9 +536,8 @@ class World:
             self._set_estimates()
             h = p.heats[slot - 1]
             heel = dict(self.plan_heel0)
-            for i in range(slot - 1):  # propagate heel via planned P50 of previous heats
-                B = p.heats[i].target_tap_t + self.mill["heel_t"]
-                heel = {el: p.heats[i].predicted[el].mean for el in ELS}
+            if slot > 1:  # heel = planned P50 of the previous heat
+                heel = {el: p.heats[slot - 2].predicted[el].mean for el in ELS}
             new = p.model_copy(deep=True)
             new.version = self.store.next_version(p.plan_id)
             new.parent_version, new.created_by, new.status, new.created_ts = p.version, "user", "PROPOSED", self._ts()
@@ -570,7 +597,7 @@ class World:
                 out["drift_alert"] = self.drift_alert and dict(text=self.drift_alert["text"])
                 out["heat_log"] = [dict(heatid=h["heatid"], slot=h["slot"], cu=h["elements"]["cu"]) for h in self.heat_log[-12:]]
                 out["changes"] = [dict(version=v.version, by=v.created_by, ts=v.created_ts, status=v.status) for v in self.store.versions() if v.plan_id == self.plan_id]
-            out["messages"] = self.messages.get(role, [])[-6:]
+            out["messages"] = [m for m in self.messages.get(role, []) if not m.get("expired")][-6:]
             out["chat"] = [c for c in self.chat if c["to"] == role][-8:]
             out["agent_busy"] = self.agent_pending > 0
             return out

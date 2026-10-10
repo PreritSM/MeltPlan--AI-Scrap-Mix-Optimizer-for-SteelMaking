@@ -11,3 +11,4 @@ Reference_Docs/
 # secrets
 .env
 *.env
+.env.local

@@ -9,7 +9,7 @@ def answer(world, role: str, text: str) -> str:
     if p is None:
         return "No plan yet. Step to the 06:00 cycle first."
     t = text.lower()
-    tot = sum(h.target_tap_t for h in p.heats)
+    tot = sum(h.steel_t for h in p.heats)
     per_t = sum(h.cost.total for h in p.heats) / tot
     if any(k in t for k in ("why", "change", "reason")) and world.decisions:
         d = world.decisions[-1]

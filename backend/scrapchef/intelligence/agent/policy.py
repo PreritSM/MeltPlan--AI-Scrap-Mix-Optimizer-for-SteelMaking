@@ -54,7 +54,8 @@ def _publish(w, tools, cand: dict, trigger_text: str, alternatives: list[str]) -
     facts = dict(decision="replan", version=w.store.next_version(w.plan_id), trigger_text=trigger_text,
                  n_heats=len(cand.get("open_slots") or []), moves=cand.get("moves", []),
                  cost_delta_per_t=cand.get("delta_per_t") or 0.0, new_per_t=cand.get("cost_per_t"),
-                 binding=(cand.get("binding") or [""])[0], reason="")
+                 binding=(cand.get("binding") or [""])[0], reason="",
+                 delta_breakdown=cand.get("delta_breakdown"), recipe_floors_dropped=cand.get("recipe_floors_dropped"))
     nar = narrate(facts)  # templates only: the fallback stays deterministic
     tools.seen |= fact_numbers(facts)  # derived deterministically from tool results (version, heat count), so allowed
     out = tools.call("propose_plan", dict(candidate_id=cand["candidate_id"], rationale=nar["text"], alternatives=alternatives))

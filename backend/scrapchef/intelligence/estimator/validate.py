@@ -84,7 +84,7 @@ def main() -> None:
     (ROOT / "data" / "estimates.json").write_text(json.dumps({r["element"]: r for r in res}, indent=1))
     L = ["# Composition estimator report (auto-generated)\n",
          "Time split 70/15/15 by heat order; metrics on the last 15% (held-out). Priors are ASSUMED (Table H2 via grade_map).\n",
-         f"Calibrated metallic yield (A4): **{res[0]['yield_']:.3f}**. Heats with a measured previous-heat chemistry: "
+         f"Metallic yield (A4, Table H2 group yields, shared with the optimiser): **{res[0]['yield_']:.3f}** effective over the cohort. Heats with a measured previous-heat chemistry: "
          f"{res[0]['prev_measured_frac']:.0%} (others use the trailing median as heel chemistry).\n"]
     for r in res:
         el = r["element"].upper()

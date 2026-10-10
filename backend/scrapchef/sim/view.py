@@ -58,7 +58,7 @@ def process_state(w) -> dict:
                          online_kalman={el: [round(float(x), 4) for x in w.kf[el].e] for el in w.kf}, drift=w.drift_alert, last_heat=last,
                          caveat="Bootstrap SDs understate error; one mill code is ~85% of mass, so minor groups are weakly identified."))
     opt_card = card("optimizer", "intelligence", "Chance-constrained optimiser", "ESTIMATED", "fresh" if plan else "idle",
-                    dict(mode="chance", alpha=0.05), dict(version=plan and plan.version, per_t=plan and sum(h.cost.total for h in plan.heats) / sum(h.target_tap_t for h in plan.heats)),
+                    dict(mode="chance", alpha=0.05), dict(version=plan and plan.version, per_t=plan and sum(h.cost.total for h in plan.heats) / sum(h.steel_t for h in plan.heats)),
                     dict(binding=plan and [c.model_dump() for c in plan.binding], limits=cfg("specs")["classes"][cfg("specs")["default"]],
                          spec_class=cfg("specs")["default"], note="Limits are ASSUMED (A3)"))
     en_card = card("energy", "intelligence", "Energy & cost model", "ESTIMATED", "fresh", dict(n=energy and energy["n"]),

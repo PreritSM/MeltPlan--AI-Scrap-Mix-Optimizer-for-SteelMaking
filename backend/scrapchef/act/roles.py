@@ -23,7 +23,7 @@ def project(plan: PlanVersion, role: str, baseline_per_t: float | None = None, e
     progress = progress or {}
     base = dict(plan_id=plan.plan_id, version=plan.version, status=plan.status, mode=plan.mode,
                 explanation=(explanation or {}).get(role))
-    tot_t = sum(h.target_tap_t for h in plan.heats)
+    tot_t = sum(h.steel_t for h in plan.heats)
     tot_cost = sum(h.cost.total for h in plan.heats)
     per_t = tot_cost / tot_t if tot_t else 0
     groups: dict[str, float] = {}
@@ -32,7 +32,7 @@ def project(plan: PlanVersion, role: str, baseline_per_t: float | None = None, e
             groups[g] = groups.get(g, 0) + t
     if role in ("email", "supervisor", "shift_leader"):
         base["summary"] = dict(n_heats=len(plan.heats), tonnes_by_group={g: round(t, 1) for g, t in groups.items()})
-        base["heats"] = [dict(slot=h.slot, target_tap_t=h.target_tap_t, frozen=h.frozen, group_t=h.group_t,
+        base["heats"] = [dict(slot=h.slot, target_tap_t=h.target_tap_t, tap_t=h.steel_t, frozen=h.frozen, group_t=h.group_t,
                               headroom=_headroom(h, role == "shift_leader"), progress=progress.get(h.slot, "planned"))
                          for h in plan.heats]
     if role in ("email", "supervisor"):

@@ -19,7 +19,7 @@ def _cost_lines(per_t: float, baseline_per_t: float | None, rm: dict | None) -> 
 
 
 def render(plan: PlanVersion, date: str, baseline_per_t: float | None, rationale: str, risk_match: dict | None = None) -> dict:
-    tot_t = sum(h.target_tap_t for h in plan.heats)
+    tot_t = sum(h.steel_t for h in plan.heats)
     per_t = sum(h.cost.total for h in plan.heats) / tot_t
     groups: dict[str, float] = {}
     for h in plan.heats:

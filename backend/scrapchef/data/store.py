@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import duckdb
+import numpy as np
 import pandas as pd
 import yaml
 
@@ -51,6 +52,12 @@ def priors(element: str) -> tuple[list[float], list[float]]:
         mu.append(m)
         sd.append(s)
     return mu, sd
+
+
+def group_yields() -> np.ndarray:
+    """Metallic yield per group (ASSUMED, Table H2 via grade_map). The single source for tap weight: estimator, optimiser, replay."""
+    gm = cfg("grade_map")
+    return np.array([gm["categories"][gm["groups"][g]["category"]]["yield"] for g in GROUPS], float)
 
 
 def recipe_bounds() -> dict[str, tuple[float, float]]:
