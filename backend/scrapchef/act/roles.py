@@ -45,6 +45,7 @@ def project(plan: PlanVersion, role: str, baseline_per_t: float | None = None, e
                 hh["cost"] = h.cost.model_dump()
     if role == "supervisor":
         base["binding"] = [c.model_dump() for c in plan.binding]
+        base["hand_edited"] = plan.hand_edited
     if role == "email":
         base["binding"] = [c.plain for c in plan.binding[:2]]
     if role in ("supervisor", "shift_leader", "crane"):

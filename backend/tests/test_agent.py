@@ -1,6 +1,7 @@
 """Agent: tools and guards, the deterministic fallback, and the LLM loop driven by a scripted fake LLM."""
 import json
 
+import numpy as np
 import pytest
 
 from scrapchef.intelligence.agent import loop
@@ -324,3 +325,96 @@ def test_basket_complete_needs_a_released_plan(world):
     _released(world)
     with pytest.raises(ValueError, match="not on the released list"):
         world.basket_complete(1, 99)
+
+
+# ---- Control Suite hand edits
+def _shift(h, src, dst, t):
+    m = dict(h.group_t)
+    m[src] = m.get(src, 0.0) - t
+    m[dst] = m.get(dst, 0.0) + t
+    return m
+
+
+def _groups_by_cu(world):
+    from scrapchef.data.store import GROUPS
+    world._set_estimates()
+    mu = world.ctx.est.mu["cu"]
+    return GROUPS[int(mu.argmin())], GROUPS[int(mu.argmax())]
+
+
+def test_edit_re_predicts_later_heats_and_drops_stale_shadow_prices(world):
+    p = world.current_plan()
+    clean, dirty = _groups_by_cu(world)
+    t = min(15.0, p.heats[1].group_t.get(clean, 0.0))
+    assert t > 1
+    ev = world.evaluate(2, _shift(p.heats[1], clean, dirty, t))
+    assert [d["slot"] for d in ev["downstream"]] == list(range(3, len(p.heats) + 1))
+    new = world.edit(2, _shift(p.heats[1], clean, dirty, t))
+    a, b = p.heats, new.heats
+    assert b[0] == a[0]                                                   # earlier heat untouched
+    assert b[2].group_t == a[2].group_t and b[2].baskets == a[2].baskets   # later heat: same mix, re-predicted only
+    assert b[2].predicted["cu"].mean > a[2].predicted["cu"].mean and b[2].predicted["cu"].p_exceed > a[2].predicted["cu"].p_exceed
+    assert ev["downstream"][0]["p_exceed"] == pytest.approx(max(x.p_exceed for x in b[2].predicted.values()))
+    assert all(int(c.name.rpartition("@")[2]) < 2 for c in new.binding) and new.hand_edited == [2]
+    assert world.phone("supervisor")["plan"]["hand_edited"] == [2]
+
+
+def test_tapped_loading_loaded_and_frozen_heats_are_locked(world):
+    world.approve(); world.release()
+    world.step_heat()                                          # heat 1 tapped
+    p = world.current_plan()
+    world.grab_done(2, 1, p.heats[1].baskets[0].items[0].mat_code, 1.0)   # heat 2 loading
+    for b in p.heats[2].baskets:                               # heat 3 loaded
+        world.basket_complete(3, b.basket_no)
+    p.heats[3].frozen = True                                   # heat 4 frozen by the user
+    world.store.db.execute("UPDATE plans SET body=? WHERE plan_id=? AND version=?", (p.model_dump_json(), p.plan_id, p.version))
+    for slot, st in [(1, "tapped"), (2, "loading"), (3, "loaded"), (4, "frozen")]:
+        with pytest.raises(ValueError, match=f"heat {slot} is {st}"):
+            world.edit(slot, dict(p.heats[slot - 1].group_t))
+        ev = world.evaluate(slot, dict(p.heats[slot - 1].group_t))   # still evaluated, read-only
+        assert ev["locked"] and ev["predicted"]["cu"]["mean"] > 0
+    assert world.evaluate(5, dict(p.heats[4].group_t))["locked"] is None
+
+
+def test_recipe_bounds_warn_but_the_edit_saves(world):
+    p = world.current_plan()
+    h = p.heats[1]
+    m = _shift(h, "SCRAP_3A", "SCRAP_25A_3ACH", h.group_t["SCRAP_3A"])      # no bulk scrap at all: far below its floor
+    ev = world.evaluate(2, m)
+    assert any("SCRAP_3A" in r and "recipe range" in r for r in ev["rule_violations"]) and not ev["availability_violations"]
+    assert world.edit(2, m).heats[1].group_t.get("SCRAP_3A", 0.0) == 0.0
+
+
+def test_an_edit_over_a_reported_shortage_cap_is_refused(world):
+    loop.handle(world, dict(kind="inbox", text=supplier_email(world), role="logistics", ts=world._ts()), world.llm)
+    assert world.caps.get("SCRAP_3A", 0) > 0
+    p = world.current_plan()
+    h = p.heats[-1]
+    src = max((g for g in h.group_t if g != "SCRAP_3A"), key=h.group_t.get)
+    m = _shift(h, src, "SCRAP_3A", min(20.0, h.group_t[src]))
+    ev = world.evaluate(h.slot, m)
+    assert any(v.startswith("SCRAP_3A") and "reported shortage" in v for v in ev["availability_violations"])
+    with pytest.raises(ValueError, match="reported shortage"):
+        world.edit(h.slot, m)
+
+
+def test_recipe_check_follows_a_relaxed_re_plan(world):
+    """Live run: after a re-plan that dropped the 3A floor, every untouched heat showed a recipe-range warning."""
+    cid = world.solve_candidate({"group_caps_t": {"SCRAP_3A": 590.0}, "relax_recipe_bounds": True})[1]["candidate_id"]
+    world.publish_candidate(cid, dict(email="x", supervisor="x", shift_leader="x", crane="x"), "3A capped.")
+    p = world.current_plan()
+    assert all(world.evaluate(h.slot, dict(h.group_t))["rule_violations"] == [] for h in p.heats)
+
+
+def test_heel_for_the_heat_after_a_tapped_one_is_the_measured_result(world):
+    from scrapchef.data.store import GROUPS
+    from scrapchef.intelligence.optimizer.model import predict_heat
+    world.step_heat()
+    assert world.progress[1] == "tapped"
+    p = world.current_plan()
+    m = dict(p.heats[1].group_t)
+    ev = world.evaluate(2, m)
+    x = np.array([m.get(g, 0.0) for g in GROUPS])
+    want = predict_heat(world.ctx, x, None, world.heel)["cu"]["mean"]
+    planned = predict_heat(world.ctx, x, None, {el: p.heats[0].predicted[el].mean for el in world.heel})["cu"]["mean"]
+    assert ev["predicted"]["cu"]["mean"] == pytest.approx(want) and abs(want - planned) > 1e-6

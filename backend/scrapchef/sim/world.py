@@ -25,8 +25,8 @@ from scrapchef.intelligence.agent.llm import LLM
 from scrapchef.intelligence.agent.triggers import SurpriseTracker
 from scrapchef.intelligence.estimator.kalman import ElementKF
 from scrapchef.intelligence.estimator.massbalance import build, sym
-from scrapchef.intelligence.optimizer.evaluate import evaluate_mix, risk_matched_baseline
-from scrapchef.intelligence.optimizer.model import ELS, make_context
+from scrapchef.intelligence.optimizer.evaluate import P_TOL, evaluate_mix, risk_matched_baseline
+from scrapchef.intelligence.optimizer.model import ELS, make_context, predict_heat
 from scrapchef.intelligence.optimizer.plan import build_plan, heat_from_groups
 from scrapchef.read.mock.adapters import MockHandling, MockInventory, MockSchedule
 
@@ -105,6 +105,7 @@ class World:
             # agent planning state: availability caps / spec / risk level chosen by published re-plans, candidates, outputs
             self.spec_class, self.alpha = cfg("specs")["default"], self.mill["alpha"]
             self.caps: dict[str, float] = {}
+            self.live_bounds: dict | None = None   # recipe bounds of the published re-plan (relaxed floors); None = ctx.bounds
             self.base_inventory = np.full(len(GROUPS), 1e6)
             self.candidates: dict[str, dict] = {}
             self.n_candidates = 0
@@ -180,6 +181,7 @@ class World:
             taps = [s.target_tap_t for s in sched]
             self._set_estimates()
             self.spec_class, self.alpha, self.caps = cfg("specs")["default"], self.mill["alpha"], {}  # a new day starts from defaults
+            self.live_bounds = None
             self.base_inventory = self._inventory(idx)
             self.ctx.inventory = self.base_inventory.copy()
             self.ctx.limits = cfg("specs")["classes"][self.spec_class]
@@ -420,7 +422,7 @@ class World:
             if relax_floor:
                 summary["recipe_floors_dropped"] = relax_floor
             self.candidates[cid] = dict(plan=full, summary=summary, caps={g: v for g, v in caps.items()},
-                                        base_version=plan.version, spec_class=spec, alpha=alpha)
+                                        base_version=plan.version, spec_class=spec, alpha=alpha, bounds=dict(c.bounds))
             return full, summary
 
     def churn_blocks(self, summary: dict) -> str | None:
@@ -456,6 +458,7 @@ class World:
                 self.store.transition(plan, "SUPERSEDED", actor, self._ts(), f"re-plan: {trigger_text}")
             self.store.save(new, actor, self._ts(), trigger_text)
             self.caps, self.spec_class, self.alpha = dict(cand["caps"]), cand["spec_class"], cand["alpha"]
+            self.live_bounds = cand.get("bounds")   # the Control Suite's recipe check follows a relaxed re-plan
             self.ctx.limits = cfg("specs")["classes"][self.spec_class]   # Control Suite, open-heat risk and the history line follow the live spec
             self.explanation = dict(rationale)
             kept, costs = [], [cand["summary"]["cost_per_t"]]
@@ -561,21 +564,79 @@ class World:
             self._expire_messages(["crane"], f"v{p.version} released")
             self._emit("released", {"version": p.version}, ["process", "shift_leader", "crane"])
 
+    # ------------------------------------------------------------ Control Suite (hand edits)
+    def _heel_for(self, plan: PlanVersion, slot: int) -> dict[str, float]:
+        """Heel chemistry for heat `slot`: the measured result if heat slot-1 is the last tapped one, the plan's start heel for
+        heat 1, else heat slot-1's predicted mean in `plan`."""
+        tapped = [h.slot for h in plan.heats if self.progress.get(h.slot) == "tapped"]
+        if tapped and slot - 1 == max(tapped):
+            return dict(self.heel)
+        if slot == 1:
+            return dict(self.plan_heel0)
+        return {el: plan.heats[slot - 2].predicted[el].mean for el in ELS}
+
+    def _edit_lock(self, h) -> str | None:
+        st = "frozen" if h.frozen else self.progress.get(h.slot)
+        return f"heat {h.slot} is {st}: it can no longer be edited" if st in ("tapped", "loading", "loaded", "frozen") else None
+
+    def _edit_checks(self, plan: PlanVersion, slot: int, group_t: dict[str, float]) -> tuple[list[str], list[str]]:
+        """(rule_violations, availability_violations). Recipe share bounds only warn (deliberate departures are allowed);
+        shortage caps and yard stock block. Caps cover the open, non-frozen heats and stock the whole day, as in solve_candidate."""
+        x = np.array([group_t.get(g, 0.0) for g in GROUPS])
+        tot = x.sum()
+        rules = []
+        for i, g in enumerate(GROUPS):
+            lo, hi = (self.live_bounds or self.ctx.bounds)[g]
+            s = x[i] / tot if tot > 0 else 0.0
+            if s < lo - 1e-3 or s > hi + 1e-3:
+                rules.append(f"{g} is {s:.0%} of the charge, outside the usual {lo:.0%}–{hi:.0%} recipe range")
+        mix = lambda h: x if h.slot == slot else np.array([h.group_t.get(g, 0.0) for g in GROUPS])
+        start, frozen = self._split(plan)
+        open_t = sum((mix(h) for j, h in enumerate(plan.heats[start:]) if j not in frozen), np.zeros(len(GROUPS)))
+        day_t = sum((mix(h) for h in plan.heats), np.zeros(len(GROUPS)))
+        avail = [f"{g}: the open heats would use {open_t[GROUPS.index(g)]:.1f} t, above the {cap:.1f} t available (reported shortage)"
+                 for g, cap in self.caps.items() if open_t[GROUPS.index(g)] > cap + 0.05]
+        avail += [f"{g}: the day's heats would use {day_t[i]:.1f} t, above the {self.base_inventory[i]:.1f} t in the yard (MOCK stock)"
+                  for i, g in enumerate(GROUPS) if day_t[i] > self.base_inventory[i] + 0.05]
+        return rules, avail
+
+    def _downstream(self, plan: PlanVersion, slot: int, pred: dict) -> list[dict]:
+        """Later untapped heats re-predicted from their unchanged mixes with the chained heel (no solve)."""
+        out, heel = [], {el: pred[el]["mean"] for el in ELS}
+        for h in plan.heats[slot:]:
+            if self.progress.get(h.slot) == "tapped":
+                continue
+            pr = predict_heat(self.ctx, np.array([h.group_t.get(g, 0.0) for g in GROUPS]), None, heel)
+            el = max(pr, key=lambda e: pr[e]["p_exceed"])
+            out.append(dict(slot=h.slot, worst_el=el, p_exceed=pr[el]["p_exceed"], was_p_exceed=h.predicted[el].p_exceed,
+                            breach=pr[el]["p_exceed"] > plan.alpha + P_TOL))
+            heel = {e: pr[e]["mean"] for e in ELS}
+        return out
+
     def edit(self, slot: int, group_t: dict[str, float], actor="supervisor") -> PlanVersion:
         with self.lock:
             p = self.current_plan()
+            h = p.heats[slot - 1]
+            lock = self._edit_lock(h)
+            if lock:
+                raise ValueError(lock)
             if sum(group_t.values()) > self.mill["capacity_t"]:
                 raise ValueError(f"charge {sum(group_t.values()):.1f} t is above the {self.mill['capacity_t']:.0f} t furnace capacity")
-            self.ctx.heel_c0 = dict(self.plan_heel0)
+            _, avail = self._edit_checks(p, slot, group_t)
+            if avail:
+                raise ValueError("; ".join(avail))
             self._set_estimates()
-            h = p.heats[slot - 1]
-            heel = dict(self.plan_heel0)
-            if slot > 1:  # heel = planned P50 of the previous heat
-                heel = {el: p.heats[slot - 2].predicted[el].mean for el in ELS}
             new = p.model_copy(deep=True)
             new.version = self.store.next_version(p.plan_id)
             new.parent_version, new.created_by, new.status, new.created_ts = p.version, "user", "PROPOSED", self._ts()
-            new.heats[slot - 1] = heat_from_groups(self.ctx, slot, h.target_tap_t, group_t, heel, h.spec_class)
+            new.heats[slot - 1] = heat_from_groups(self.ctx, slot, h.target_tap_t, group_t, self._heel_for(p, slot), h.spec_class)
+            for j, o in enumerate(new.heats[slot:], start=slot):   # later heats: same mix and baskets, re-predicted from the new heel
+                if self.progress.get(o.slot) != "tapped":
+                    rp = heat_from_groups(self.ctx, o.slot, o.target_tap_t, o.group_t, self._heel_for(new, o.slot), o.spec_class, o.frozen)
+                    new.heats[j] = o.model_copy(update=dict(predicted=rp.predicted))
+            # solver duals do not hold for a hand-edited mix or for heats whose heel it changed; horizon (stock) duals span them too
+            new.binding = [c for c in p.binding if c.name.rpartition("@")[2].isdigit() and int(c.name.rpartition("@")[2]) < slot]
+            new.hand_edited = sorted(set(p.hand_edited) | {slot})
             self.store.transition(p, "SUPERSEDED", actor, self._ts(), f"manual edit of heat {slot}")
             self.store.save(new, actor, self._ts(), f"manual edit heat {slot}")
             self.store.transition(new, "EMAILED", actor, self._ts(), "edit saved")
@@ -587,9 +648,12 @@ class World:
             p = self.current_plan()
             self._set_estimates()
             h = p.heats[slot - 1]
-            heel = dict(self.plan_heel0) if slot == 1 else {el: p.heats[slot - 2].predicted[el].mean for el in ELS}
-            ev = evaluate_mix(self.ctx, group_t, h.target_tap_t, heel, tap_tol_t=self.mill["edit_tap_tol_t"], capacity_t=self.mill["capacity_t"])
+            ev = evaluate_mix(self.ctx, group_t, h.target_tap_t, self._heel_for(p, slot), alpha=p.alpha,
+                              tap_tol_t=self.mill["edit_tap_tol_t"], capacity_t=self.mill["capacity_t"])
             ev["delta_cost_per_t"] = ev["cost"]["per_t"] - h.cost.per_t
+            ev["rule_violations"], ev["availability_violations"] = self._edit_checks(p, slot, group_t)
+            ev["locked"] = self._edit_lock(h)   # still evaluated, read-only
+            ev["downstream"] = self._downstream(p, slot, ev["predicted"])
             return ev
 
     def grab_done(self, slot: int, basket: int, mat_code: int, t: float):
@@ -653,6 +717,7 @@ class World:
                                self.risk_match(p) if role in ("email", "supervisor") else None)
                 if role == "supervisor":
                     view["alternatives"] = self.alternatives.get((p.plan_id, p.version), [])
+                    view["next_version"], view["released_version"] = self.store.next_version(p.plan_id), self.released_version
                 if role == "crane":
                     rv = self.released_version
                     rel = next((v for v in self.store.versions() if v.plan_id == p.plan_id and v.version == rv), None) if rv else None

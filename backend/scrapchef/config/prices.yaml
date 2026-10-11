@@ -2,7 +2,7 @@
 groups:
   SCRAP_3A: 430
   SCRAP_16A_6A: 375
-  SCRAP_25A_3ACH: 430
+  SCRAP_25A_3ACH: 450
   IRON_UNITS: 575
 electricity_usd_per_mwh: 90
 o2_usd_per_nm3: 0.10

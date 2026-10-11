@@ -16,9 +16,12 @@ function bottomLine(perT: number, rm: any) {
   return `Net effect against the historical mix: about ${net >= 0 ? "+" : "-"}${money(Math.abs(net))}/t. ${pay} and ${risk}.`;
 }
 
+/** Why a heat can no longer be hand-edited (mirrors World._edit_lock), or null. */
+const lockOf = (h: any) => (h.frozen ? "frozen" : ["tapped", "loading", "loaded"].includes(h.progress) ? h.progress : null);
+
 function ControlSuite({ plan, groups, onClose }: { plan: any; groups: string[]; onClose: () => void }) {
   const { act } = useSim();
-  const [slot, setSlot] = useState(1);
+  const [slot, setSlot] = useState(() => plan.heats.find((h: any) => !lockOf(h))?.slot ?? 1);
   const heat = plan.heats.find((h: any) => h.slot === slot);
   const [mix, setMix] = useState<Record<string, number>>({});
   const [ev, setEv] = useState<any>(null);
@@ -30,20 +33,29 @@ function ControlSuite({ plan, groups, onClose }: { plan: any; groups: string[]; 
     t.current = setTimeout(async () => { const s = performance.now(); try { setEv(await post("/api/plan/evaluate", { slot, group_t: mix })); setMs(performance.now() - s); } catch { /* ignore */ } }, 60);
   }, [mix, slot]);
   const total = Object.values(mix).reduce((a, b) => a + b, 0);
+  const lock = lockOf(heat);
+  const blocked = ev?.availability_violations ?? [];
+  const reason = lock ? `Heat ${slot} is ${lock}: it can no longer be edited.` : total > 140 ? "The charge does not fit the furnace" : blocked.length ? "Not enough material: see the banner" : "";
   return (<div>
     <div className="row"><b>Control Suite</b><span className="sp" /><button onClick={onClose}>Close</button></div>
-    <select value={slot} onChange={(e) => setSlot(+e.target.value)} aria-label="heat">{plan.heats.map((h: any) => <option key={h.slot} value={h.slot}>Heat {h.slot}{h.frozen ? " (frozen)" : ""}</option>)}</select>
+    <select value={slot} onChange={(e) => setSlot(+e.target.value)} aria-label="heat">{plan.heats.map((h: any) => <option key={h.slot} value={h.slot}>Heat {h.slot}{lockOf(h) ? ` (${lockOf(h)})` : ""}</option>)}</select>
+    {lock && <div className="small"><b>{reason}</b> Showing its prediction read-only.</div>}
     {groups.map((g) => (<div key={g}><div className="small">{g.replace("SCRAP_", "")} · {(mix[g] ?? 0).toFixed(1)} t</div>
-      <input type="range" min={0} max={140} step={0.5} value={mix[g] ?? 0} onChange={(e) => setMix({ ...mix, [g]: +e.target.value })} aria-label={g} /></div>))}
+      <input type="range" min={0} max={140} step={0.5} value={mix[g] ?? 0} disabled={!!lock} onChange={(e) => setMix({ ...mix, [g]: +e.target.value })} aria-label={g} /></div>))}
     <div className="small">Charge {total.toFixed(1)} t · tap {ev?.tap_actual_t?.toFixed(1) ?? "–"} t (target {heat.target_tap_t}) {ms !== null && `· ${ms.toFixed(0)} ms`}</div>
     {ev && <>
       <div><b>{money(ev.cost.per_t)}/t</b> <span style={{ color: ev.delta_cost_per_t > 0 ? "var(--bad)" : "var(--ok)" }}>({ev.delta_cost_per_t >= 0 ? "+" : ""}{ev.delta_cost_per_t.toFixed(2)} vs plan)</span></div>
       {Object.entries(ev.predicted).map(([el, p]: any) => <Headroom key={el} el={el} p={p} />)}
       {ev.violations.length > 0 && <div className="banner">Over limit: {ev.violations.map(sym).join(", ")}</div>}
       {ev.process_violations?.map((v: string) => <div key={v} className="banner">⚠ {v}</div>)}
+      {ev.rule_violations?.map((v: string) => <div key={v} className="banner">⚠ {v}</div>)}
+      {blocked.map((v: string) => <div key={v} className="banner">⛔ {v}</div>)}
+      {ev.downstream?.filter((d: any) => d.breach && d.p_exceed > d.was_p_exceed + 1e-4).map((d: any) => (
+        <div key={d.slot} className="banner">⚠ Heat {d.slot} would exceed {sym(d.worst_el)} ({(d.p_exceed * 100).toFixed(1)}%) because of the dirtier heel</div>))}
     </>}
-    <div className="row"><button onClick={() => setMix({ ...heat.group_t })}>Revert</button>
-      <button className="primary" disabled={total > 140} title={total > 140 ? "The charge does not fit the furnace" : ""} onClick={async () => { await act("/api/plan/edit", { slot, group_t: mix }); onClose(); }}>Save as new version</button></div>
+    {plan.released_version && <div className="small">Saving creates v{plan.next_version}. It needs approval and release; the crane keeps loading v{plan.released_version} until then.</div>}
+    <div className="row"><button disabled={!!lock} onClick={() => setMix({ ...heat.group_t })}>Revert</button>
+      <button className="primary" disabled={!!reason} title={reason} onClick={async () => { await act("/api/plan/edit", { slot, group_t: mix }); onClose(); }}>Save as new version</button></div>
   </div>);
 }
 
@@ -80,7 +92,8 @@ export default function SupervisorView() {
       <select value={slot} onChange={(e) => setSlot(+e.target.value)} aria-label="heat">{plan.heats.map((h: any) => <option key={h.slot} value={h.slot}>{h.slot}</option>)}</select></div>
     {Object.entries(heat.headroom).map(([el, p]: any) => <Headroom key={el} el={el} p={p} />)}
     <div className="small"><b>Binding constraints</b></div>
-    {plan.binding.length ? plan.binding.slice(0, 3).map((b: any, i: number) => <div key={i} className="small">• {b.plain}</div>) : <div className="small">None binding.</div>}
+    {plan.binding.length ? plan.binding.slice(0, 3).map((b: any, i: number) => <div key={i} className="small">• {b.plain}</div>) : !plan.hand_edited?.length && <div className="small">None binding.</div>}
+    {plan.hand_edited?.length > 0 && <div className="small">Shadow prices not available for hand-edited heats ({plan.hand_edited.join(", ")}) or the heats after them.</div>}
     {v.backtest && <div className="small" style={{ marginTop: 6 }}>Back-test: {v.backtest.saving_pct.toFixed(1)}% cheaper at same risk (ASSUMED prices)</div>}
     <div className="row">
       <button className="primary" disabled={!canApprove} onClick={() => act("/api/plan/approve", {})}>Approve</button>

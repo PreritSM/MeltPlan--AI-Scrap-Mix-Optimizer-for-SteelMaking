@@ -94,4 +94,5 @@ class PlanVersion(BaseModel):
     status: PlanStatus = "PROPOSED"
     heats: list[HeatPlan]
     binding: list[Constraint] = Field(default_factory=list)
+    hand_edited: list[int] = Field(default_factory=list)   # slots changed in the Control Suite: no shadow prices from them on
     provenance: Provenance = Provenance.ESTIMATED
