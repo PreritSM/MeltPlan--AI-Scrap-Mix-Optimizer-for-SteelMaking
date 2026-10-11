@@ -522,3 +522,19 @@ def test_views_show_only_the_heats_left_once_some_are_tapped(world):
     sup = world.phone("supervisor")["plan"]
     assert sup["summary"]["n_heats"] == n - 2
     assert [h["slot"] for h in world.phone("crane")["plan"]["loading"]] == list(range(3, n + 1))
+
+
+def test_act_layer_logs_are_split_by_role(world):
+    from scrapchef.sim.view import act_log
+    world.approve(); world.release()
+    p = world.current_plan()
+    world.grab_done(1, 1, p.heats[0].baskets[0].items[0].mat_code, 1.0)
+    world.notify("supervisor", "note for the supervisor only")
+    logs = {r: act_log(world, r) for r in ("email", "supervisor", "shift_leader", "crane")}
+    acts = {r: [x["action"] for x in rows] for r, rows in logs.items()}
+    assert "approved" in acts["supervisor"] and "released" not in acts["supervisor"]
+    assert "released" in acts["shift_leader"] and "grab" not in acts["shift_leader"]
+    assert "grab" in acts["crane"] and "approved" not in acts["crane"]
+    assert set(acts["email"]) == {"emailed", "email sent"}
+    assert any(x["detail"] == "note for the supervisor only" for x in logs["supervisor"])
+    assert not any(x["detail"] == "note for the supervisor only" for r in ("email", "shift_leader", "crane") for x in logs[r])

@@ -504,7 +504,7 @@ class World:
     def notify(self, role: str, text: str, sender: str = "agent"):
         with self.lock:
             self.messages.setdefault(role, []).append(dict(ts=self._ts(), sender=sender, text=text))
-            self._emit("message", {"role": role, "text": text}, ["process", role])
+            self._emit("message", {"role": role, "text": text, "sender": sender}, ["process", role])
 
     def _expire_messages(self, roles, why: str):
         """Agent notes are about a pending situation ('hold loading until the new list arrives'); once a plan is released or a new
@@ -517,7 +517,7 @@ class World:
     def post_chat(self, role: str, text: str, who: str = "agent"):
         with self.lock:
             self.chat.append(dict(who=who, to=role, text=text, ts=self._ts()))
-            self._emit("chat", {"role": role}, ["process", role])
+            self._emit("chat", {"role": role, "who": who, "text": text}, ["process", role])
 
     # ------------------------------------------------------------ agent dispatch (LLM loop with deterministic fallback)
     def dispatch(self, kind: str, text: str, role: str | None = None):

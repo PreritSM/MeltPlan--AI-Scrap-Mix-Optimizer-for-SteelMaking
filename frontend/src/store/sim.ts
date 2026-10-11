@@ -20,6 +20,8 @@ interface S {
   init: () => () => void;
 }
 
+/** Progress telemetry: refreshes the phones but is not something a person has to read, so it does not raise the unread badge. */
+const ROUTINE = new Set(["reset", "grab_done", "basket_complete", "heat_loaded", "heat_tapped", "agent_busy", "agent_done"]);
 let tid = 0;
 let timer: any = null;
 const WHO: Record<string, string> = { email: "Email", supervisor: "Supervisor", shift_leader: "Shift leader", crane: "Crane" };
@@ -53,7 +55,8 @@ export const useSim = create<S>((set, getS) => ({
     const un = subscribe((ev) => {
       set((s) => {
         const unread = { ...s.unread };
-        (ev.audience as string[]).forEach((a) => { if (a in unread && a !== s.openRole && ev.kind !== "reset") unread[a as Role]++; });
+        if (!ROUTINE.has(ev.kind))
+          (ev.audience as string[]).forEach((a) => { if (a in unread && a !== s.openRole) unread[a as Role]++; });
         const msg: Record<string, string> = { email: "New plan email", replan: "Plan changed by agent", released: "Plan released", approved: "Plan approved", drift: "Composition drift alert", shortage: "Shortage reported", issue: "Issue reported", message: "Message from the agent", chat: "Agent replied", plan_done: "All heats of the plan tapped", basket_complete: "Basket complete" };
         const text = ev.kind === "heat_loaded" ? `Heat ${ev.payload?.slot} loaded` : msg[ev.kind];
         const toasts = text ? [...s.toasts.slice(-2), { id: ++tid, text }] : s.toasts;

@@ -15,6 +15,60 @@ def card(id, lane, title, prov, state, inputs, outputs, inspector=None):
     return dict(id=id, lane=lane, title=title, provenance=prov, state=state, inputs=inputs, outputs=outputs, inspector=inspector or {})
 
 
+# Act-layer logs, one per role: what the role did (audit actor / event sender) plus what concerns it.
+AUDIT_CONCERNS = {"email": {"EMAILED"},
+                  "supervisor": {"create", "EMAILED", "SUPERVISOR_APPROVED", "REJECTED", "DROPPED", "SUPERSEDED"},
+                  "shift_leader": {"SUPERVISOR_APPROVED", "RELEASED", "DROPPED", "DONE"},
+                  "crane": {"RELEASED", "LOADING", "DROPPED", "DONE"}}
+EVENT_CONCERNS = {"email": {"email"},
+                  "supervisor": {"message", "chat", "issue", "drift", "heat_tapped"},
+                  "shift_leader": {"message", "chat", "issue", "drift", "heat_tapped", "heat_loaded"},
+                  "crane": {"message", "grab_done", "basket_complete", "heat_loaded"}}
+ACTION = {"create": "plan created", "EMAILED": "emailed", "SUPERVISOR_APPROVED": "approved", "REJECTED": "rejected", "DROPPED": "dropped",
+          "SUPERSEDED": "superseded", "RELEASED": "released", "LOADING": "loading started", "DONE": "plan done"}
+
+
+def _event_row(e: dict) -> dict:
+    p, k = e["payload"], e["kind"]
+    if k == "message":
+        return dict(actor=p.get("sender", "agent"), action=f"message to {p['role']}", detail=p["text"])
+    if k == "chat":
+        who = p.get("who", "agent")
+        return dict(actor=who, action="question" if who == p["role"] else f"reply to {p['role']}", detail=p.get("text", ""))
+    if k == "issue":
+        return dict(actor=p["role"], action="reported issue", detail=p["text"])
+    if k == "email":
+        return dict(actor="agent", action="email sent", detail=p["subject"])
+    if k == "drift":
+        return dict(actor="system", action="drift alert", detail=p.get("text", ""))
+    if k == "heat_tapped":
+        return dict(actor="furnace", action=f"heat {p['slot']} tapped", detail=p.get("heatid", ""))
+    if k == "heat_loaded":
+        return dict(actor="crane", action=f"heat {p['slot']} loaded", detail="all baskets charged")
+    if k == "grab_done":
+        return dict(actor=p.get("crane_id", "crane"), action="grab", detail=f"heat {p['heat_slot']} basket {p['basket_no']}: {p['mat_code']} {p['est_tonnes']:.1f} t")
+    if k == "basket_complete":
+        return dict(actor="crane", action=f"heat {p['slot']} basket {p['basket']} complete",
+                    detail=f"{p['auto_grabbed']} lines at planned tonnes" if p.get("auto_grabbed") else "")
+    return dict(actor="system", action=k, detail="")
+
+
+def act_log(w, role: str) -> list[dict]:
+    """Oldest first (the inspector reverses it), last 60: plan transitions this role made or must act on, then its messages, chats, issues and shop-floor events."""
+    audit = w.store.audit(w.plan_id) if w.plan_id else []
+    rows = [dict(ts=a["ts"], version=a["version"], actor=a["actor"], action=ACTION.get(a["action"], a["action"]), detail=a["detail"],
+                 _k=a["after_event"] + 0.5) for a in audit if a["actor"] == role or a["action"] in AUDIT_CONCERNS[role]]
+    since = audit[0]["ts"] if audit else ""
+    kinds = sorted(EVENT_CONCERNS[role] | {"issue", "chat"})
+    for e in w.store.events(kinds, since):
+        mine = e["kind"] in EVENT_CONCERNS[role] and role in e["audience"]
+        did = e["kind"] in ("issue", "chat") and e["payload"].get("role") == role   # e.g. the crane reporting an issue
+        if mine or did:
+            rows.append(dict(dict(ts=e["ts"], version=e["payload"].get("version"), _k=e["seq"]), **_event_row(e)))
+    rows.sort(key=lambda r: r["_k"])   # audit rows sit just after the last event emitted before them
+    return [{k: v for k, v in r.items() if k != "_k"} for r in rows[-60:]]
+
+
 def process_state(w) -> dict:
     con = connect()
     cnt = lambda t: con.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
@@ -79,7 +133,7 @@ def process_state(w) -> dict:
              ("shift_leader", "Shift leaders", st in ("RELEASED", "LOADING", "DONE")),
              ("crane", "Crane tablet", st in ("LOADING", "DONE") or bool(w.handling.log))]
     act = [card("act_" + k, "act", t, "DERIVED", "fresh" if ok else "idle", dict(plan_version=plan and plan.version),
-                dict(status=plan and plan.status), dict(audit=w.store.audit(w.plan_id), plan_status=plan and plan.status)) for k, t, ok in chain]
+                dict(status=plan and plan.status), dict(audit=act_log(w, k), plan_status=plan and plan.status)) for k, t, ok in chain]
     return dict(clock=w._ts(), mode=w.mode, plan_status=st, plan_version=plan and plan.version, cursor=w.cursor, n_replay=len(w.replay),
                 lanes=dict(read=read, data=data, intelligence=intel, act=act), selected_heat=sel,
                 heat_strip=[dict(heatid=h["heatid"], z=h["elements"]["cu"]["z"], slot=h["slot"]) for h in w.heat_log[-60:]],

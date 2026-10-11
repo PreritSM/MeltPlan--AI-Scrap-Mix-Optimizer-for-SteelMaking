@@ -54,7 +54,8 @@ class PlanStore:
         self.db.executescript("""
           DROP TABLE IF EXISTS plans; DROP TABLE IF EXISTS audit; DROP TABLE IF EXISTS events;
           CREATE TABLE plans(plan_id TEXT, version INT, body TEXT, PRIMARY KEY(plan_id, version));
-          CREATE TABLE audit(seq INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, plan_id TEXT, version INT, actor TEXT, action TEXT, detail TEXT);
+          CREATE TABLE audit(seq INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, plan_id TEXT, version INT, actor TEXT, action TEXT, detail TEXT,
+                            after_event INT);
           CREATE TABLE events(seq INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, kind TEXT, payload TEXT, audience TEXT);""")
 
     # --- plans
@@ -94,13 +95,15 @@ class PlanStore:
         return p
 
     def _audit(self, ts, p, actor, action, detail):
-        self.db.execute("INSERT INTO audit(ts,plan_id,version,actor,action,detail) VALUES (?,?,?,?,?,?)", (ts, p.plan_id, p.version, actor, action, detail))
+        # after_event: the last event seq at this point, so the act-layer logs can merge audit rows and events in true order
+        self.db.execute("INSERT INTO audit(ts,plan_id,version,actor,action,detail,after_event) VALUES (?,?,?,?,?,?,(SELECT coalesce(max(seq),0) FROM events))",
+                        (ts, p.plan_id, p.version, actor, action, detail))
 
     def audit(self, plan_id: str | None = None) -> list[dict]:
         with self.lock:
-            rows = self.db.execute("SELECT ts,plan_id,version,actor,action,detail FROM audit " + ("WHERE plan_id=? " if plan_id else "") + "ORDER BY seq",
+            rows = self.db.execute("SELECT ts,plan_id,version,actor,action,detail,after_event FROM audit " + ("WHERE plan_id=? " if plan_id else "") + "ORDER BY seq",
                                    (plan_id,) if plan_id else ()).fetchall()
-        return [dict(zip(["ts", "plan_id", "version", "actor", "action", "detail"], r)) for r in rows]
+        return [dict(zip(["ts", "plan_id", "version", "actor", "action", "detail", "after_event"], r)) for r in rows]
 
     # --- events (SSE feed)
     def emit(self, ts: str, kind: str, payload: dict, audience: list[str]) -> dict:
@@ -112,6 +115,12 @@ class PlanStore:
     def events_since(self, seq: int) -> list[dict]:
         with self.lock:
             rows = self.db.execute("SELECT seq,ts,kind,payload,audience FROM events WHERE seq>? ORDER BY seq", (seq,)).fetchall()
+        return [dict(seq=r[0], ts=r[1], kind=r[2], payload=json.loads(r[3]), audience=json.loads(r[4])) for r in rows]
+
+    def events(self, kinds: list[str], since_ts: str = "") -> list[dict]:
+        with self.lock:
+            rows = self.db.execute(f"SELECT seq,ts,kind,payload,audience FROM events WHERE kind IN ({','.join('?' * len(kinds))}) AND ts>=? ORDER BY seq",
+                                   (*kinds, since_ts)).fetchall()
         return [dict(seq=r[0], ts=r[1], kind=r[2], payload=json.loads(r[3]), audience=json.loads(r[4])) for r in rows]
 
     def last_seq(self) -> int:

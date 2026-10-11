@@ -71,7 +71,7 @@ export default function Inspector({ card, onClose }: { card: any; onClose: () =>
   } else if (card.id === "material") {
     body = (<><p className="small">{i.note}</p><Table rows={i.mapping} /></>);
   } else if (card.id.startsWith("act_")) {
-    body = (<><p>Plan status: <b>{i.plan_status ?? "–"}</b></p><h4>Audit log</h4><Table rows={(i.audit ?? []).slice().reverse().slice(0, 25)} cols={["ts", "version", "actor", "action", "detail"]} /></>);
+    body = (<><p>Plan status: <b>{i.plan_status ?? "–"}</b></p><h4>Log: what {card.title.toLowerCase()} did and what concerns it</h4><Table rows={(i.audit ?? []).slice().reverse().slice(0, 25)} cols={["ts", "version", "actor", "action", "detail"]} /></>);
   } else if (card.id === "mes") {
     body = (<><p>Adapter: {i.adapter}. Selected heat: <b>{i.selected_heat ?? "–"}</b></p>
       {i.charges && <><h4>basket_charged rows</h4><Table rows={i.charges} /></>}</>);
