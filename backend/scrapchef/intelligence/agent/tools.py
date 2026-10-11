@@ -61,6 +61,10 @@ class SendMessage(_Strict):
     text: str = Field(description="Information-only message. Numbers must come from tool results; no prices to the crane.")
 
 
+class DropPlan(_Strict):
+    reason: str = Field(description="For the supervisor: why no mix is feasible and what you tried. Numbers from tool results only.")
+
+
 SPECS: dict[str, tuple[type[BaseModel], str]] = {
     "get_state": (GetState, "Current plan, open heats, risk under current estimates, estimate drift, availability, limits, recent heats."),
     "run_optimizer": (RunOptimizer, "Solve the chance-constrained LP for the open heats with the given settings. Returns a candidate "
@@ -70,6 +74,8 @@ SPECS: dict[str, tuple[type[BaseModel], str]] = {
     "propose_plan": (ProposePlan, "Send a candidate to the supervisor as a new plan version (needs human approval). "
                                   "Refused if it fails the anti-churn rule or the text contains numbers not in tool results."),
     "send_message": (SendMessage, "Send an information-only message to one role's phone."),
+    "drop_plan": (DropPlan, "No feasible mix for the open heats: inform the supervisor with the reason, then withdraw the plan "
+                            "completely (no live plan; the crane stops loading). Only after run_optimizer returned infeasible."),
 }
 
 
@@ -128,7 +134,7 @@ class AgentTools:
         w = self.w
         plan = w.base_plan()
         if plan is None:
-            return {"plan": None, "note": "No plan yet; the 06:00 cycle has not run."}
+            return {"plan": None, "note": "No live plan (the 06:00 cycle has not run, or the plan was dropped)."}
         cur = w.open_eval(plan) or {}
         est = {el: {g: round(float(v), 4) for g, v in zip(GROUPS, w.kf[el].e)} for el in w.kf}
         return dict(
@@ -207,6 +213,18 @@ class AgentTools:
         self.messages_sent.append(dict(role=a.role, text=a.text))
         return dict(ok=True, delivered_to=a.role)
 
+    def drop_plan(self, a: DropPlan) -> dict:
+        if self.outcome.get("version"):
+            raise ToolError("a plan was already proposed in this run; it cannot also be dropped")
+        if not any((self.w.candidates.get(c) or {}).get("plan") is None for c in self.candidates):
+            raise ToolError("drop_plan needs an infeasible run_optimizer result in this run")
+        self._check_text(a.reason)
+        p = self.w.drop_plan(a.reason)
+        if p is None:
+            raise ToolError("there is no live plan to drop")
+        self.outcome = dict(decision="dropped", dropped=p.version, explanation={"supervisor": a.reason})
+        return dict(ok=True, dropped_version=p.version, status="DROPPED; supervisor informed, crane told not to load")
+
     # ------------------------------------------------------------ guards
     def _keeps_live_settings(self, cand: dict) -> bool:
         return cand["spec_class"] == self.w.spec_class and cand["alpha"] <= self.w.alpha + 1e-9
@@ -282,7 +300,7 @@ def _safe_json(s: str):
 def _brief(out: dict) -> dict:
     """Compact view of a tool result for the trace (the model still receives the full result)."""
     keep = ("error", "status", "candidate_id", "cost_per_t", "delta_per_t", "moves", "worst_p_exceed", "binding", "ok", "version",
-            "delivered_to", "alternatives_offered", "changed_heats", "violations", "hint")
+            "delivered_to", "alternatives_offered", "dropped_version", "changed_heats", "violations", "hint")
     b = {k: out[k] for k in keep if k in out}
     if not b and "plan" in out:
         p = out.get("plan") or {}

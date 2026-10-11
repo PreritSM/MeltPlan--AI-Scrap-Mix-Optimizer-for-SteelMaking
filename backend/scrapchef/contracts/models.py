@@ -80,7 +80,7 @@ class HeatPlan(BaseModel):
         return self.tap_t if self.tap_t is not None else self.target_tap_t
 
 
-PlanStatus = Literal["PROPOSED", "EMAILED", "SUPERVISOR_APPROVED", "RELEASED", "LOADING", "DONE", "SUPERSEDED", "REJECTED"]
+PlanStatus = Literal["PROPOSED", "EMAILED", "SUPERVISOR_APPROVED", "RELEASED", "LOADING", "DONE", "SUPERSEDED", "REJECTED", "DROPPED"]
 
 
 class PlanVersion(BaseModel):

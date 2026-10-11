@@ -17,6 +17,7 @@ export default function CraneView() {
   const bas = open.baskets.find((b: any) => b.basket_no === tab) ?? open.baskets[0];
   const last = bas.basket_no === Math.max(...open.baskets.map((b: any) => b.basket_no));
   const complete = (open.baskets_complete ?? []).includes(bas.basket_no);
+  const held = !!plan.hold || !!open.pending;   // a version awaits approval (crane stops), or this heat's new list is not released yet
   const waiting = plan.loading.filter((h: any) => h.progress === "loaded");
   const finish = async () => {
     await act("/api/crane/basket_complete", { slot: open.slot, basket: bas.basket_no });
@@ -29,6 +30,8 @@ export default function CraneView() {
     <div className="row"><b style={{ fontSize: 22 }}>Heat {open.slot}</b><span className="sp" />
       <select value={open.slot} onChange={(e) => { setSlot(+e.target.value); setTab(1); }} aria-label="heat">{plan.loading.map((h: any) => <option key={h.slot} value={h.slot}>{h.slot}</option>)}</select></div>
     <div className="row">{open.baskets.map((b: any) => <button key={b.basket_no} className={`tab ${bas.basket_no === b.basket_no ? "on" : ""}`} onClick={() => setTab(b.basket_no)}>Basket {b.basket_no}</button>)}</div>
+    {plan.hold && <div className="banner">⛔ {plan.hold}</div>}
+    {open.pending && !plan.hold && <div className="banner">Updated list (v{open.pending.version}, {open.pending.status === "EMAILED" ? "awaiting supervisor approval" : "awaiting release"}). Do not load heat {open.slot} yet.</div>}
     <div className="small">Basket {bas.basket_no} target {bas.target_t} t (typical band from history)</div>
     {bas.items.map((it: any) => {
       const k = `${bas.basket_no}-${it.mat_code}`;
@@ -36,9 +39,9 @@ export default function CraneView() {
       return (
         <div key={k} className={`li ${done ? "done" : ""}`}>
           <b>{it.grab_order}.</b><div style={{ flex: 1 }}><b>{it.mat_code}</b> {it.mat_name}<div className="small">{it.tonnes} t · {it.grabs} grabs</div></div>
-          <button className="primary" disabled={done} onClick={async () => { setPending({ ...pending, [`${open.slot}-${k}`]: true }); await act("/api/crane/grab_done", { slot: open.slot, basket: bas.basket_no, mat_code: it.mat_code, tonnes: it.tonnes }); }}>GRAB DONE</button>
+          <button className="primary" disabled={done || held} onClick={async () => { setPending({ ...pending, [`${open.slot}-${k}`]: true }); await act("/api/crane/grab_done", { slot: open.slot, basket: bas.basket_no, mat_code: it.mat_code, tonnes: it.tonnes }); }}>GRAB DONE</button>
         </div>); })}
-    <div className="row"><button className="primary" disabled={complete || open.progress === "tapped"} onClick={finish}
+    <div className="row"><button className="primary" disabled={complete || held || open.progress === "tapped"} onClick={finish}
       title="Confirms every line of this basket; lines not ticked are recorded at planned tonnes">
       {complete ? "Basket complete ✓" : last ? `Heat ${open.slot} loaded` : "Basket complete"}</button></div>
     <IssueBox role="crane" placeholder="Report a problem, e.g. “3ACh pile is empty”" />

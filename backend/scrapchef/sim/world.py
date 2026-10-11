@@ -127,7 +127,7 @@ class World:
         if not mine and self._lost_plan_logged != self.plan_id:   # once per plan: this is polled on every state read
             self._lost_plan_logged = self.plan_id
             log.error("plan store lost plan %s: was the DB wiped by another process?", self.plan_id)
-        vs = [p for p in mine if p.status not in ("SUPERSEDED", "REJECTED")]
+        vs = [p for p in mine if p.status not in ("SUPERSEDED", "REJECTED", "DROPPED")]
         return vs[-1] if vs else None
 
     def _baseline_heats(self):
@@ -147,7 +147,7 @@ class World:
     def risk_match(self, plan: PlanVersion) -> dict | None:
         """Historical mix vs optimiser at the historical mix's own predicted risk (cached per plan version).
         plan_worst_p: the plan's own risk on the same element, averaged over heats the same way as worst_p."""
-        key = (plan.plan_id, plan.version)
+        key = (plan.plan_id, plan.version, tuple(h.slot for h in plan.heats))
         if key not in self.rm_cache:
             X, _ = self._baseline_heats()
             rm = risk_matched_baseline(self.ctx, X.mean(0), [h.target_tap_t for h in plan.heats], dict(self.ctx.heel_c0))
@@ -189,7 +189,7 @@ class World:
             self.plan_heel0 = dict(self.heel)
             date = self.clock.strftime("%Y-%m-%d")
             for p in self.store.versions():
-                if p.plan_id == date and p.status not in ("SUPERSEDED", "REJECTED", "DONE"):
+                if p.plan_id == date and p.status not in ("SUPERSEDED", "REJECTED", "DONE", "DROPPED"):
                     self.store.transition(p, "SUPERSEDED", "agent", self._ts(), "new daily plan")
             prior = [p.version for p in self.store.versions() if p.plan_id == date]
             version = self.store.next_version(date)  # a re-plan of the same day (e.g. after a reject) continues the numbering
@@ -199,7 +199,7 @@ class World:
             self.plan_id, self.plan_heat0 = date, idx[0]
             self._expire_messages(list(self.messages), "new daily plan")
             self.progress, self.baskets_done = {}, {}
-            self.released_version = None
+            self.released_version, self.pending_banner = None, None
             self.store.save(plan, "agent", self._ts(), trigger)
             facts = dict(decision="new_plan", version=version, trigger_text="Daily 06:00 plan.", n_heats=len(plan.heats), moves=[],
                          cost_delta_per_t=0.0, new_per_t=sum(h.cost.total for h in plan.heats) / sum(h.steel_t for h in plan.heats), reason="", binding=(plan.binding[0].plain if plan.binding else ""))
@@ -210,8 +210,19 @@ class World:
             self._emit("plan_created", {"plan_id": plan.plan_id, "version": version}, ["process", "email", "supervisor"])
             return plan
 
+    def _remaining(self, plan: PlanVersion) -> PlanVersion:
+        """The plan as it still matters: tapped heats are history, so views, emails and costs cover only the heats still to make
+        (the whole plan once every heat is tapped)."""
+        left = [h for h in plan.heats if self.progress.get(h.slot) != "tapped"]
+        return plan.model_copy(update=dict(heats=left)) if left and len(left) < len(plan.heats) else plan
+
+    def _tapped(self, plan: PlanVersion) -> list[int]:
+        return [h.slot for h in plan.heats if self.progress.get(h.slot) == "tapped"]
+
     def _send_email(self, plan: PlanVersion, rationale: str):
-        mail = email_mod.render(plan, self.clock.strftime("%Y-%m-%d"), self.baseline_per_t(), rationale, self.risk_match(plan))
+        left = self._remaining(plan)
+        mail = email_mod.render(left, self.clock.strftime("%Y-%m-%d"), self.baseline_per_t(), rationale, self.risk_match(left),
+                                self._tapped(plan) if left is not plan else None)
         mail.update(ts=self._ts(), read=False)
         self.emails.append(mail)
         self.store.transition(plan, "EMAILED", "agent", self._ts(), "daily email plan")
@@ -308,11 +319,11 @@ class World:
 
     # ------------------------------------------------------------ planning services (called by the agent's tools and its fallback)
     def base_plan(self) -> PlanVersion | None:
-        """The plan a re-plan starts from: the live version, or the latest one if it was just rejected."""
+        """The plan a re-plan starts from: the live version, or the latest one if it was just rejected (None once dropped)."""
         p = self.current_plan()
         if p is None and self.plan_id:
             vs = [v for v in self.store.versions() if v.plan_id == self.plan_id]
-            p = vs[-1] if vs else None
+            p = vs[-1] if vs and vs[-1].status != "DROPPED" else None
         return p
 
     def _split(self, plan: PlanVersion) -> tuple[int, dict[int, np.ndarray]]:
@@ -473,6 +484,22 @@ class World:
             self._emit("replan", {"version": new.version, "trigger": trigger_text, "explanation": rationale},
                        ["process", "email", "supervisor", "shift_leader", "crane"])
             return new
+
+    def drop_plan(self, reason: str, actor: str = "agent") -> PlanVersion | None:
+        """No feasible plan: tell the supervisor why, then withdraw the plan completely. There is no live version afterwards,
+        the crane has no list to load and the agent stops re-planning; the next plan comes from the 06:00 cycle."""
+        with self.lock:
+            p = self.base_plan()
+            if p is None or p.status in ("DONE", "SUPERSEDED", "DROPPED"):
+                return None
+            self.notify("supervisor", f"{reason} Plan v{p.version} is dropped: no plan is live until a new one is made.")
+            self.store.transition(p, "DROPPED", actor, self._ts(), reason)
+            stop = f"Plan v{p.version} is dropped: no feasible charge mix. Do not load heats that are not loaded yet; wait for the supervisor."
+            self._expire_messages(["shift_leader", "crane"], f"v{p.version} dropped")
+            self.released_version, self.pending_banner = None, dict(version=p.version, text=stop, ts=self._ts())
+            self.notify("shift_leader", stop)
+            self._emit("plan_dropped", {"version": p.version, "reason": reason}, ["process", "email", "supervisor", "shift_leader", "crane"])
+            return p
 
     def notify(self, role: str, text: str, sender: str = "agent"):
         with self.lock:
@@ -656,12 +683,48 @@ class World:
             ev["downstream"] = self._downstream(p, slot, ev["predicted"])
             return ev
 
+    def pending_change(self) -> tuple[PlanVersion | None, set[int]]:
+        """A newer version than the released one (awaiting approval or release) and the heats whose mix it changes. The crane
+        sees those heats' new lists but may not load them until the new version is released."""
+        p, rv = self.current_plan(), self.released_version
+        if p is None or rv is None or p.version == rv:
+            return None, set()
+        rel = next((v for v in self.store.versions() if v.plan_id == p.plan_id and v.version == rv), None)
+        if rel is None:
+            return None, set()
+        old = {h.slot: h for h in rel.heats}
+        return p, {h.slot for h in p.heats if h.slot in old and h.group_t != old[h.slot].group_t
+                   and self.progress.get(h.slot) not in ("tapped", "loading", "loaded")}
+
+    def crane_hold(self) -> str | None:
+        """Why the crane may not move at all: a newer version than the released one is not approved yet (awaiting the supervisor,
+        or rejected and being re-planned). The crane resumes once the supervisor approves."""
+        rv = self.released_version
+        vs = [v for v in self.store.versions() if v.plan_id == self.plan_id] if rv is not None else []
+        latest = vs[-1] if vs else None
+        if latest is None or latest.version == rv:
+            return None
+        if latest.status in ("PROPOSED", "EMAILED"):
+            return f"Plan v{latest.version} is waiting for supervisor approval: stop loading until it is approved."
+        if latest.status == "REJECTED":
+            return f"Plan v{latest.version} was rejected and a new plan is being made: stop loading until one is approved."
+        return None
+
+    def _check_not_pending(self, slot: int):
+        hold = self.crane_hold()
+        if hold:
+            raise ValueError(hold)
+        p, changed = self.pending_change()
+        if slot in changed:
+            raise ValueError(f"heat {slot} changes in v{p.version}, which is not released yet: wait for the new list")
+
     def grab_done(self, slot: int, basket: int, mat_code: int, t: float):
         """Idempotent per (plan, slot, basket, code): a repeat returns the recorded event and emits nothing."""
         with self.lock:
             e = self.handling.find(self.plan_id, slot, basket, mat_code)
             if e:
                 return e
+            self._check_not_pending(slot)
             e = self.handling.record(self._ts(), "crane-1", mat_code, t, slot, basket, self.plan_id)
             p = self.current_plan()
             if p and p.status == "RELEASED":
@@ -686,6 +749,7 @@ class World:
                 raise ValueError(f"heat {slot} basket {basket} is not on the released list")
             if self.progress.get(slot) == "tapped":
                 raise ValueError(f"heat {slot} is already tapped")
+            self._check_not_pending(slot)
             done = self.baskets_done.setdefault(slot, set())
             state = lambda n: dict(slot=slot, basket=basket, auto_grabbed=n, baskets_complete=sorted(done), progress=self.progress.get(slot, "planned"))
             if basket in done:
@@ -713,19 +777,26 @@ class World:
             if role == "email":
                 out["emails"] = list(reversed(self.emails))
             if p is not None:
-                view = project(p, role, self.baseline_per_t() if role in ("email", "supervisor") else None, self.explanation, self.progress,
-                               self.risk_match(p) if role in ("email", "supervisor") else None)
+                left = self._remaining(p)
+                view = project(left, role, self.baseline_per_t() if role in ("email", "supervisor") else None, self.explanation, self.progress,
+                               self.risk_match(left) if role in ("email", "supervisor") else None)
+                view["tapped"] = self._tapped(p) if left is not p else []
                 if role == "supervisor":
                     view["alternatives"] = self.alternatives.get((p.plan_id, p.version), [])
                     view["next_version"], view["released_version"] = self.store.next_version(p.plan_id), self.released_version
                 if role == "crane":
                     rv = self.released_version
                     rel = next((v for v in self.store.versions() if v.plan_id == p.plan_id and v.version == rv), None) if rv else None
-                    view = project(rel, "crane", None, self.explanation, self.progress) if rel else dict(status="NO RELEASED PLAN", loading=[])
+                    view = project(self._remaining(rel), "crane", None, self.explanation, self.progress) if rel else dict(status="NO RELEASED PLAN", loading=[])
+                    pend, changed = self.pending_change()
+                    if changed:   # show the new lists for changed heats, locked until that version is released
+                        new = {hh["slot"]: hh for hh in project(self._remaining(pend), "crane", None, self.explanation, self.progress)["loading"]}
+                        view["loading"] = [dict(new[hh["slot"]], pending=dict(version=pend.version, status=pend.status))
+                                           if hh["slot"] in changed else hh for hh in view["loading"]]
                     for hh in view["loading"]:
                         hh["grabbed"] = [f"{e.basket_no}-{e.mat_code}" for e in self.handling.log if e.plan_id == rel.plan_id and e.heat_slot == hh["slot"]]
                         hh["baskets_complete"] = sorted(self.baskets_done.get(hh["slot"], ()))
-                    view["banner"] = self.pending_banner
+                    view["banner"], view["hold"] = self.pending_banner, self.crane_hold()
                 out["plan"] = view
             if role == "supervisor":
                 out["drift_alert"] = self.drift_alert

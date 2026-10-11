@@ -45,13 +45,14 @@ def world():
 
 def test_tool_schemas_are_valid_function_specs():
     names = {t["function"]["name"] for t in openai_tools()}
-    assert names == {"get_state", "run_optimizer", "evaluate_mix", "compare_plans", "propose_plan", "send_message"}
+    assert names == {"get_state", "run_optimizer", "evaluate_mix", "compare_plans", "propose_plan", "send_message", "drop_plan"}
     assert all(t["function"]["parameters"]["type"] == "object" for t in openai_tools())
 
 
 def test_parse_issue():
     assert parse_issue("Only 590 t of 3A left today")[0] == {"group_caps_t": {"SCRAP_3A": 590.0}}
     assert parse_issue("No 3ACh available")[0] == {"exclude_groups": ["SCRAP_25A_3ACH"]}
+    assert parse_issue("3ACh pile is empty")[0] == {"exclude_groups": ["SCRAP_25A_3ACH"]}
     assert parse_issue("crane 2 is slow")[0] == {}
 
 
@@ -147,6 +148,59 @@ def test_message_without_a_proposal_falls_back_to_a_plan(world):
     assert rec["path"] == "fallback after LLM" and rec["decision"] == "replan" and world.current_plan().version == rec["version"]
 
 
+def _assert_dropped(world, version):
+    assert world.current_plan() is None and world.base_plan() is None
+    assert world.store.get(world.plan_id, version).status == "DROPPED"
+    sup = [m["text"] for m in world.messages["supervisor"]]
+    assert any(f"Plan v{version} is dropped" in t for t in sup)
+    acts = [a["action"] for a in world.store.audit(world.plan_id)]
+    assert acts[-1] == "DROPPED"
+    kinds = [e["kind"] for e in world.store.events_since(0)]   # the supervisor is informed before the plan is withdrawn
+    assert kinds.index("message") < kinds.index("plan_dropped")
+    assert world.phone("crane")["plan"]["status"] == "NO RELEASED PLAN" and "dropped" in world.pending_banner["text"]
+
+
+def test_fallback_drops_an_infeasible_plan_after_informing_the_supervisor(world):
+    world.approve(); world.release()
+    v = world.current_plan().version
+    rec = loop.handle(world, dict(kind="issue", text="only 200 t of 3A left", role="shift_leader", ts=world._ts()), world.llm)
+    assert rec["path"] == "fallback" and rec["decision"] == "dropped"
+    assert all(s["result"]["status"] == "infeasible" for s in rec["steps"] if s["name"] == "run_optimizer")
+    _assert_dropped(world, v)
+    # nothing left to re-plan: a later email does not resurrect the dropped plan
+    rec = loop.handle(world, dict(kind="inbox", text="Only 480 t of 3A today.", role="logistics", ts=world._ts()), world.llm)
+    assert rec["decision"] == "infeasible" and world.current_plan() is None
+    assert world.make_plan() is not None and world.current_plan().status == "EMAILED" and world.pending_banner is None
+
+
+def test_llm_drops_an_infeasible_plan(world):
+    cap = {"group_caps_t": {"SCRAP_3A": 200.0}}
+    v = world.current_plan().version
+    llm = FakeLLM([call("run_optimizer", cap), call("run_optimizer", {**cap, "relax_recipe_bounds": True}, 1),
+                   call("drop_plan", dict(reason="Only 200 t of 3A: no feasible mix, even with relaxed recipe bounds."), 2),
+                   Reply(content="Dropped.")])
+    rec = loop.handle(world, dict(kind="issue", text="only 200 t of 3A left", role="shift_leader", ts=world._ts()), llm)
+    assert rec["path"] == "llm" and rec["decision"] == "dropped"
+    _assert_dropped(world, v)
+
+
+def test_infeasible_without_a_drop_gets_one_reminder_then_falls_back(world):
+    cap = {"group_caps_t": {"SCRAP_3A": 200.0}}
+    llm = FakeLLM([call("run_optimizer", cap), call("send_message", dict(role="supervisor", text="Nothing works with 200 t of 3A."), 1),
+                   Reply(content="Told the supervisor."), Reply(content="Still not dropping.")])
+    rec = loop.handle(world, dict(kind="issue", text="only 200 t of 3A left", role="shift_leader", ts=world._ts()), llm)
+    assert any(m["role"] == "user" and "neither proposed nor dropped" in m["content"] for m in llm.calls[-1])
+    assert rec["path"] == "fallback after LLM" and rec["decision"] == "dropped" and world.current_plan() is None
+
+
+def test_drop_plan_needs_an_infeasible_run(world):
+    t = AgentTools(world, dict(kind="issue", text="x", role="shift_leader"))
+    assert "infeasible run_optimizer" in t.call("drop_plan", dict(reason="No mix."))["error"]
+    t.call("run_optimizer", {})   # feasible
+    assert "infeasible run_optimizer" in t.call("drop_plan", dict(reason="No mix."))["error"]
+    assert world.current_plan() is not None
+
+
 def test_llm_error_falls_back(world):
     class Broken(FakeLLM):
         def chat(self, *a, **k):
@@ -158,7 +212,7 @@ def test_llm_error_falls_back(world):
 def test_llm_that_never_acts_on_an_issue_falls_back(world):
     rec = loop.handle(world, dict(kind="issue", text="No 3ACh available.", role="shift_leader", ts=world._ts()),
                       FakeLLM([Reply(content="Looks fine.")]))
-    assert rec["path"] == "fallback after LLM" and rec["decision"] in ("replan", "message", "infeasible")
+    assert rec["path"] == "fallback after LLM" and rec["decision"] in ("replan", "message", "infeasible", "dropped")
 
 
 def test_tool_budget_is_enforced(world):
@@ -418,3 +472,53 @@ def test_heel_for_the_heat_after_a_tapped_one_is_the_measured_result(world):
     want = predict_heat(world.ctx, x, None, world.heel)["cu"]["mean"]
     planned = predict_heat(world.ctx, x, None, {el: p.heats[0].predicted[el].mean for el in world.heel})["cu"]["mean"]
     assert ev["predicted"]["cu"]["mean"] == pytest.approx(want) and abs(want - planned) > 1e-6
+
+
+def test_crane_holds_after_a_rejection_until_a_plan_is_approved(world):
+    world.approve(); world.release()
+    world.edit(world.current_plan().heats[-1].slot, dict(world.current_plan().heats[-1].group_t))   # new version awaiting approval
+    v = world.current_plan()
+    world.store.transition(v, "REJECTED", "supervisor", world._ts(), "no")
+    assert "rejected" in world.crane_hold()
+    with pytest.raises(ValueError, match="rejected"):
+        world.basket_complete(1, 1)
+
+
+def test_crane_sees_the_pending_list_for_changed_heats_but_cannot_load_it(world):
+    world.approve(); world.release()
+    rec = loop.handle(world, dict(kind="issue", text="3ACh pile is empty", role="crane", ts=world._ts()), world.llm)
+    assert rec["decision"] == "replan"
+    pend, changed = world.pending_change()
+    assert changed and pend.version == rec["version"]
+    heats = {h["slot"]: h for h in world.phone("crane")["plan"]["loading"]}
+    for s in changed:
+        names = [i["mat_name"] for b in heats[s]["baskets"] for i in b["items"]]
+        assert "3ACh" not in names and heats[s]["pending"]["version"] == pend.version
+    s = min(changed)
+    code = heats[s]["baskets"][0]["items"][0]["mat_code"]
+    # until the supervisor approves, the crane does not move at all
+    assert "waiting for supervisor approval" in world.phone("crane")["plan"]["hold"]
+    with pytest.raises(ValueError, match="waiting for supervisor approval"):
+        world.grab_done(s, 1, code, 1.0)
+    with pytest.raises(ValueError, match="waiting for supervisor approval"):
+        world.basket_complete(s, 1)
+    world.approve()   # approved, not yet released: the hold lifts, but a changed heat still waits for its new list
+    assert world.crane_hold() is None
+    with pytest.raises(ValueError, match="not released yet"):
+        world.grab_done(s, 1, code, 1.0)
+    world.release()   # once released, the new list is the crane's list
+    assert world.pending_change() == (None, set())
+    assert "pending" not in world.phone("crane")["plan"]["loading"][s - 1]
+    world.grab_done(s, 1, code, 1.0)
+
+
+def test_views_show_only_the_heats_left_once_some_are_tapped(world):
+    world.approve(); world.release()
+    world.step_heat(); world.step_heat()                       # heats 1 and 2 tapped
+    n = len(world.current_plan().heats)
+    for role in ("supervisor", "shift_leader", "email"):
+        v = world.phone(role)["plan"]
+        assert [h["slot"] for h in v["heats"]] == list(range(3, n + 1)) and v["tapped"] == [1, 2]
+    sup = world.phone("supervisor")["plan"]
+    assert sup["summary"]["n_heats"] == n - 2
+    assert [h["slot"] for h in world.phone("crane")["plan"]["loading"]] == list(range(3, n + 1))

@@ -68,8 +68,10 @@ export default function SupervisorView() {
   if (edit) return <ControlSuite plan={plan} groups={groups} onClose={() => setEdit(false)} />;
   const heat = plan.heats.find((h: any) => h.slot === slot) ?? plan.heats[0];
   const canApprove = plan.status === "EMAILED";
+  const dropped = plan.status === "DROPPED";
   return (<div>
     {v.drift_alert && <div className="banner">⚠ {v.drift_alert.text}</div>}
+    {dropped && <div className="banner">Plan v{plan.version} was dropped: no feasible charge mix. Use “Plan 06:00” in the Process View for a new plan.</div>}
     <div className="row"><b>Plan v{plan.version}</b><span className="chip shadow">{plan.status}</span></div>
     <div><b>{money(plan.cost.per_t)}/t</b> <span className="small">{plan.cost.risk_match ? "plan, held to the 95% limits" : `vs historical mix ${money(plan.cost.baseline_per_t)}/t (not risk-matched)`}</span></div>
     {plan.cost.risk_match && <div className="small">
@@ -77,7 +79,7 @@ export default function SupervisorView() {
       Optimiser at that same risk: {money(plan.cost.risk_match.matched_per_t)}/t ({plan.cost.risk_match.matched_per_t - plan.cost.risk_match.hist_per_t >= 0 ? "+" : ""}{(plan.cost.risk_match.matched_per_t - plan.cost.risk_match.hist_per_t).toFixed(2)}).
       Plan vs that: {plan.cost.per_t - plan.cost.risk_match.matched_per_t >= 0 ? "+" : ""}{(plan.cost.per_t - plan.cost.risk_match.matched_per_t).toFixed(2)}/t for the 95% limits.
       <div>{bottomLine(plan.cost.per_t, plan.cost.risk_match)}</div></div>}
-    <div className="small">{plan.summary.n_heats} heats · {Object.entries(plan.summary.tonnes_by_group).map(([g, t]: any) => `${g.replace("SCRAP_", "")} ${t}t`).join(" · ")}</div>
+    <div className="small">{plan.summary.n_heats} {plan.tapped?.length ? `remaining heats (${plan.tapped[0]}–${plan.tapped[plan.tapped.length - 1]} tapped)` : "heats"} · {Object.entries(plan.summary.tonnes_by_group).map(([g, t]: any) => `${g.replace("SCRAP_", "")} ${t}t`).join(" · ")}</div>
     {plan.explanation && <div className="mail msg"><div className="small">Agent</div>{plan.explanation}</div>}
     <AgentMessages items={v.messages} />
     {plan.alternatives?.length > 0 && <div><div className="small"><b>Agent's alternatives</b> (approve one instead of v{plan.version})</div>
@@ -97,8 +99,8 @@ export default function SupervisorView() {
     {v.backtest && <div className="small" style={{ marginTop: 6 }}>Back-test: {v.backtest.saving_pct.toFixed(1)}% cheaper at same risk (ASSUMED prices)</div>}
     <div className="row">
       <button className="primary" disabled={!canApprove} onClick={() => act("/api/plan/approve", {})}>Approve</button>
-      <button onClick={() => setEdit(true)}>Edit</button>
-      <button className="danger" disabled={["RELEASED", "LOADING", "DONE"].includes(plan.status)} onClick={() => act("/api/plan/reject", { reason: "Supervisor requested a new plan" })}>Reject</button>
+      <button disabled={dropped} onClick={() => setEdit(true)}>Edit</button>
+      <button className="danger" disabled={["RELEASED", "LOADING", "DONE", "DROPPED"].includes(plan.status)} onClick={() => act("/api/plan/reject", { reason: "Supervisor requested a new plan" })}>Reject</button>
     </div>
     <ChatThread role="supervisor" items={v.chat} placeholder="Ask the agent (why / cost / what if)…" />
   </div>);

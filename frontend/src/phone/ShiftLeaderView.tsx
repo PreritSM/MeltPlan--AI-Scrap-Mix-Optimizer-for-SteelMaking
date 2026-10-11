@@ -12,7 +12,7 @@ export default function ShiftLeaderView() {
     <AgentMessages items={v.messages} />
     <div className="row"><b>Plan v{plan.version}</b><span className="chip shadow">{plan.status}</span><span className="sp" />
       <button className="primary" disabled={plan.status !== "SUPERVISOR_APPROVED"} onClick={() => act("/api/plan/release")}>Release to cranes</button></div>
-    <div className="small">Timeline</div>
+    <div className="small">Timeline{plan.tapped?.length ? ` · heats ${plan.tapped[0]}–${plan.tapped[plan.tapped.length - 1]} tapped` : ""}</div>
     {plan.heats.map((h: any) => (<div key={h.slot} className="li">
       <b>Heat {h.slot}</b><span className="small">{h.target_tap_t} t</span><span className="sp" />
       <span className="small" title={h.progress === "loaded" ? "Charged in baskets, waiting for the furnace" : ""}>{h.progress}</span>

@@ -13,12 +13,13 @@ from scrapchef.contracts.models import PlanVersion
 from scrapchef.data.store import ROOT  # noqa: F401  (tests repoint it; the store itself no longer defaults to a file)
 
 ALLOWED = {
-    "PROPOSED": {"EMAILED", "SUPERSEDED", "REJECTED"},
-    "EMAILED": {"SUPERVISOR_APPROVED", "REJECTED", "SUPERSEDED"},
-    "SUPERVISOR_APPROVED": {"RELEASED", "REJECTED", "SUPERSEDED"},
-    "RELEASED": {"LOADING", "DONE", "SUPERSEDED"},
-    "LOADING": {"DONE", "SUPERSEDED"},
-    "DONE": set(), "SUPERSEDED": set(), "REJECTED": set(),
+    "PROPOSED": {"EMAILED", "SUPERSEDED", "REJECTED", "DROPPED"},
+    "EMAILED": {"SUPERVISOR_APPROVED", "REJECTED", "SUPERSEDED", "DROPPED"},
+    "SUPERVISOR_APPROVED": {"RELEASED", "REJECTED", "SUPERSEDED", "DROPPED"},
+    "RELEASED": {"LOADING", "DONE", "SUPERSEDED", "DROPPED"},
+    "LOADING": {"DONE", "SUPERSEDED", "DROPPED"},
+    "REJECTED": {"DROPPED"},   # rejected and no feasible re-plan: the day's plan is withdrawn
+    "DONE": set(), "SUPERSEDED": set(), "DROPPED": set(),
 }
 
 

@@ -15,7 +15,7 @@ ALIASES = [
     (r"scrap_3a\b|\b3a\b", "SCRAP_3A"),
     (r"iron_units|\biron\b|\bhbi\b|\bpig\b|\bdri\b", "IRON_UNITS"),
 ]
-NEG = r"\b(no|none|unavailable|out of|zero|not available|run out|ran out|without)\b"
+NEG = r"\b(no|none|empty|unavailable|out of|zero|not available|run out|ran out|without)\b"
 QTY = r"(\d+(?:\.\d+)?)\s*(?:t|tonnes?|tons?)\b"
 
 
@@ -64,6 +64,15 @@ def _publish(w, tools, cand: dict, trigger_text: str, alternatives: list[str]) -
     return dict(decision="replan", version=out["version"], explanation=nar["text"], narrator=nar["narrator"], facts=facts)
 
 
+def _drop(tools, msg: str) -> dict:
+    """Nothing feasible: inform the supervisor and withdraw the plan. If there is no plan to drop, the message alone goes out."""
+    out = tools.call("drop_plan", dict(reason=msg))
+    if out.get("error"):
+        tools.call("send_message", dict(role="supervisor", text=msg))
+        return dict(decision="infeasible", reason=f"no feasible option ({out['error']})")
+    return dict(decision="dropped", reason="no feasible option", explanation={"supervisor": msg})
+
+
 def fallback(w, ev: dict, tools, reason: str = "") -> dict:
     kind, text, role = ev["kind"], ev["text"], ev.get("role")
     if kind == "question":
@@ -78,9 +87,7 @@ def fallback(w, ev: dict, tools, reason: str = "") -> dict:
         if cand.get("status") != "optimal":   # e.g. the bath itself is contaminated: explore before giving up
             options = explore(tools, {}, include_base=False)
             if not options:
-                msg = f"{text} No feasible re-plan under the updated estimates, even with relaxed bounds, a looser spec or 10% risk; please review the open heats."
-                tools.call("send_message", dict(role="supervisor", text=msg))
-                return dict(decision="infeasible", reason="no feasible option")
+                return _drop(tools, f"{text} No feasible re-plan under the updated estimates, even with relaxed bounds, a looser spec or 10% risk.")
             return _publish(w, tools, options[0], f"{text} The default re-plan is infeasible; relaxed settings were needed.",
                             [o["candidate_id"] for o in options[1:]])
         block = w.churn_blocks(cand)
@@ -98,9 +105,7 @@ def fallback(w, ev: dict, tools, reason: str = "") -> dict:
             return dict(decision="message", reason="issue not understood by the fallback")
         options = explore(tools, params)
         if not options:
-            msg = f"{text} ({meaning}). No feasible mix even with relaxed bounds, a looser spec or 10% risk; the current plan stands until reviewed."
-            tools.call("send_message", dict(role="supervisor", text=msg))
-            return dict(decision="infeasible", reason="no feasible option")
+            return _drop(tools, f"{text} ({meaning}). No feasible mix even with relaxed bounds, a looser spec or 10% risk.")
         rec = _publish(w, tools, options[0], f"{text} ({meaning}).", [o["candidate_id"] for o in options[1:]])
         if rec["decision"] == "replan":
             tools.call("send_message", dict(role="crane", text="Plan change pending approval: hold heats not yet loaded until the new list arrives."))
@@ -110,8 +115,7 @@ def fallback(w, ev: dict, tools, reason: str = "") -> dict:
         params, meaning = parse_issue(text)
         options = explore(tools, params) if params else [c for c in [tools.call("run_optimizer", {})] if c.get("status") == "optimal"]
         if not options:
-            tools.call("send_message", dict(role="supervisor", text="No feasible re-plan found for the rejected version; please edit manually."))
-            return dict(decision="infeasible", reason="no feasible option")
+            return _drop(tools, f"Rejected: \"{text}\". No feasible re-plan found for the rejected version.")
         note = f"Rejected: \"{text}\"." + (f" Applied: {meaning}." if meaning else " The fallback cannot interpret the reason, so the same optimum is re-proposed; use Edit for manual changes.")
         return _publish(w, tools, options[0], note, [o["candidate_id"] for o in options[1:]])
 

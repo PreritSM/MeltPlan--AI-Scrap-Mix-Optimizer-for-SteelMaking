@@ -15,9 +15,12 @@ MAX_TOOL_CALLS = 10
 DEADLINE_S = 60.0
 NEEDS_ACTION = {"issue", "inbox", "rejection"}   # these must end in a proposal or a message
 UNSAFE_NUDGE = ("The live plan's exceedance probability is above alpha and you have no feasible candidate yet. Explore in order: "
-                "relax_recipe_bounds, then spec_class \"plant_tight\", then alpha 0.10, and propose the least-relaxed feasible candidate.")
+                "relax_recipe_bounds, then spec_class \"plant_tight\", then alpha 0.10, and propose the least-relaxed feasible candidate. "
+                "If none is feasible, call drop_plan.")
 NUDGE = ("You found a feasible candidate but did not propose a plan, so nothing reaches the supervisor. Call propose_plan now "
-         "(fix the rationale if a tool rejected it), or reply with one sentence explaining why no candidate should be proposed.")
+         "(fix the rationale if a tool rejected it). If no candidate respects the event's limits, call drop_plan instead.")
+DROP_NUDGE = ("Every optimiser run was infeasible, but the plan was neither proposed nor dropped. Call drop_plan now with a reason "
+              "for the supervisor saying what you tried.")
 
 SYSTEM = """You are the re-planning agent of ScrapChef, a scrap-mix optimiser for an electric arc furnace (EAF) steel mill.
 A chance-constrained linear program (the optimiser) chooses charge mixes. Your job is to decide when and how to use it,
@@ -37,13 +40,16 @@ How to handle each event:
   default settings. Propose only if it is worthwhile (propose_plan enforces the anti-churn rule); otherwise make no proposal
   and say why in one sentence. If the default run is infeasible and the live plan's risk is above alpha, explore as for an
   issue (relax_recipe_bounds first) and propose the least-relaxed feasible candidate: an unsafe live plan is not "no change".
+  If nothing is feasible even then, call drop_plan.
 - issue / inbox: turn the text into run_optimizer settings (exclude_groups or group_caps_t). If the result is infeasible,
   explore in this order: relax_recipe_bounds, then spec_class "plant_tight", then alpha 0.10. Propose the least-relaxed feasible
   candidate: a looser spec class or a higher alpha changes the product's quality risk, so it may only be the proposal if nothing
   is feasible under the live settings; otherwise offer it as an alternative and offer up to 2 other feasible candidates as alternatives (only ones with a different cost; identical options are dropped). If a candidate has delta_breakdown, say how much of the
   cost change is the availability limit and how much comes from dropping recipe floors; never present a forced change as a saving. If loading should pause or change, tell the crane
-  with send_message. If nothing is feasible, send_message to the supervisor explaining what you tried.
-- rejection: read the supervisor's reason, adjust the settings to address it, then propose.
+  with send_message. If nothing is feasible within the event's limits (never loosen a reported availability to get a feasible
+  mix), call drop_plan with a reason for the supervisor saying what you tried: it informs the supervisor and withdraws the plan.
+  Keep one tool call for propose_plan or drop_plan.
+- rejection: read the supervisor's reason, adjust the settings to address it, then propose (drop_plan if nothing is feasible).
 - question: answer in at most 3 sentences as your final message, using tool results only. Do not propose unless asked."""
 
 
@@ -74,7 +80,8 @@ def handle(w, ev: dict, llm) -> dict:
         why = f"answer failed the guards: {tools.note}" if tools.note else "LLM finished without the required action"
     except Exception as e:  # API error, timeout, malformed reply
         why = f"LLM error: {type(e).__name__}: {str(e)[:200]}"
-    if tools.outcome.get("version") or (tools.messages_sent and not _missing_proposal(w, ev, tools)):   # it already acted: do not act twice
+    if tools.outcome.get("version") or tools.outcome.get("dropped") or \
+            (tools.messages_sent and not _missing_proposal(w, ev, tools) and not _missing_drop(w, ev, tools)):   # it already acted: do not act twice
         return _record(w, ev, "llm (partial)", tools, tools.outcome or dict(decision="message"), _merge(steps, tools.trace), reason=why)
     n = len(tools.trace)
     out = policy.fallback(w, ev, tools)
@@ -104,6 +111,11 @@ def run_llm(w, ev: dict, tools: AgentTools, llm, steps: list[dict]) -> dict | No
                 nudged = True
                 steps.append(dict(type="text", text="[loop] reminder: a feasible candidate exists but no plan was proposed", at=len(tools.trace)))
                 messages += [{"role": "assistant", "content": r.content or ""}, {"role": "user", "content": NUDGE}]
+                continue
+            if not nudged and _missing_drop(w, ev, tools):
+                nudged = True
+                steps.append(dict(type="text", text="[loop] reminder: nothing is feasible but the plan was not dropped", at=len(tools.trace)))
+                messages += [{"role": "assistant", "content": r.content or ""}, {"role": "user", "content": DROP_NUDGE}]
                 continue
             if not nudged and _unsafe_and_unexplored(w, ev, tools):
                 nudged = True
@@ -141,6 +153,14 @@ def _missing_proposal(w, ev: dict, tools: AgentTools) -> bool:
             and any((w.candidates.get(c) or {}).get("plan") is not None for c in tools.candidates))
 
 
+def _missing_drop(w, ev: dict, tools: AgentTools) -> bool:
+    """An issue/inbox/rejection run where every optimiser run was infeasible, yet the plan was neither proposed nor dropped."""
+    if ev["kind"] not in NEEDS_ACTION or tools.outcome.get("version") or tools.outcome.get("dropped") or w.base_plan() is None:
+        return False
+    cands = [w.candidates.get(c) or {} for c in tools.candidates]
+    return bool(cands) and all(c.get("plan") is None for c in cands)
+
+
 def _unsafe_and_unexplored(w, ev: dict, tools: AgentTools) -> bool:
     """A lab/drift run that leaves an over-risk live plan alone without finding any feasible candidate."""
     if ev["kind"] not in ("lab_surprise", "drift") or tools.outcome.get("version"):
@@ -153,9 +173,9 @@ def _unsafe_and_unexplored(w, ev: dict, tools: AgentTools) -> bool:
 
 def _outcome(w, ev: dict, tools: AgentTools, final: str) -> dict | None:
     """Turn the run into a decision, or None if a required action is missing (-> fallback)."""
-    if tools.outcome.get("version"):
+    if tools.outcome.get("version") or tools.outcome.get("dropped"):
         return tools.outcome
-    if _missing_proposal(w, ev, tools) or _unsafe_and_unexplored(w, ev, tools):
+    if _missing_proposal(w, ev, tools) or _missing_drop(w, ev, tools) or _unsafe_and_unexplored(w, ev, tools):
         return None
     if ev["kind"] == "question":
         role = ev.get("role") or "supervisor"
