@@ -67,6 +67,8 @@ def _publish(w, tools, cand: dict, trigger_text: str, alternatives: list[str]) -
 def _drop(tools, msg: str) -> dict:
     """Nothing feasible: inform the supervisor and withdraw the plan. If there is no plan to drop, the message alone goes out."""
     out = tools.call("drop_plan", dict(reason=msg))
+    if tools.outcome.get("decision") == "reinstated":
+        return dict(tools.outcome, reason="no different feasible option: rejected change withdrawn")
     if out.get("error"):
         tools.call("send_message", dict(role="supervisor", text=msg))
         return dict(decision="infeasible", reason=f"no feasible option ({out['error']})")
@@ -117,7 +119,10 @@ def fallback(w, ev: dict, tools, reason: str = "") -> dict:
         if not options:
             return _drop(tools, f"Rejected: \"{text}\". No feasible re-plan found for the rejected version.")
         note = f"Rejected: \"{text}\"." + (f" Applied: {meaning}." if meaning else " The fallback cannot interpret the reason, so the same optimum is re-proposed; use Edit for manual changes.")
-        return _publish(w, tools, options[0], note, [o["candidate_id"] for o in options[1:]])
+        rec = _publish(w, tools, options[0], note, [o["candidate_id"] for o in options[1:]])
+        if rec["decision"] != "replan":   # e.g. the optimum is the rejected plan itself (anti-churn refuses it)
+            return _drop(tools, f"Rejected: \"{text}\". No different feasible plan was found.")
+        return rec
 
     return dict(decision="message", reason=f"unhandled event kind {kind}")
 

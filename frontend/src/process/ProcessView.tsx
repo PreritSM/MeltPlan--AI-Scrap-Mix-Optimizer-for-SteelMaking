@@ -20,7 +20,9 @@ function TopBar() {
       <span className={`chip ${sim ? "sim" : "shadow"}`}>{sim ? "SIMULATED SCENARIO" : "SHADOW REPLAY"}</span>
       <button className="primary" onClick={() => act("/api/sim/plan")} title="Advance to the next 06:00 and plan the next 24 h">▶| Plan 06:00</button>
       <button onClick={() => setPlaying(!playing)} aria-label={playing ? "pause" : "play"}>{playing ? "⏸" : "▶"}</button>
-      <button onClick={() => act("/api/sim/step_heat")} disabled={!state.plan_status || state.agent?.busy} title={state.agent?.busy ? "The next heat waits for the agent" : ""}>Step heat</button>
+      <button onClick={() => act("/api/sim/step_heat")} disabled={!state.plan_status || state.agent?.busy || !!state.sim_hold}
+        title={state.agent?.busy ? "The next heat waits for the agent" : state.sim_hold ?? ""}>Step heat</button>
+      {state.sim_hold && !state.agent?.busy && <span className="chip busy" title={state.sim_hold}>{state.sim_hold.includes("not released") ? "Waiting for release" : "Waiting for approval"}</span>}
       {state.ready_slot && <span className="chip shadow" title="All baskets charged; Step heat taps it">Heat {state.ready_slot} ready</span>}
       <button onClick={() => act("/api/sim/inbox", {})} disabled={!state.plan_status} title="Scenario (MOCK): logistics emails that 3A is short">📧 Supplier email</button>
       <span className={`chip ${state.agent?.busy ? "busy" : state.agent?.available ? "shadow" : "sim"}`} title={state.agent?.llm}>

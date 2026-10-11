@@ -125,3 +125,59 @@ def test_a_db_owned_by_another_process_is_refused_and_not_wiped(tmp_path):
         owner.communicate("")
     s = PlanStore(db)                      # the owner has exited: this process may take the file
     assert PlanStore(db).epoch != s.epoch  # and re-open it on a reset (the lock is held once per process)
+
+
+def _released_with_pending_change(mode="SIMULATED"):
+    """A released plan v1 and an agent re-plan v2 for a 3A shortage, awaiting the supervisor (fallback agent)."""
+    w = World(mode)
+    w.make_plan(); w.approve(); w.release()
+    rec = w.report_issue("shift_leader", "Only 420 t of 3A left today")
+    assert rec["decision"] == "replan" and w.current_plan().status == "EMAILED"
+    return w
+
+
+def test_rejecting_a_replan_puts_the_released_plan_back():
+    """E2E #32: rejecting the agent's change must not drop the day's plan when an approved, released plan existed before it."""
+    w = _released_with_pending_change()
+    v1 = w.store.get(w.plan_id, 1)
+    rej = w.current_plan().version
+    w.reject("Supervisor requested a new plan")
+    live = w.current_plan()
+    assert live is not None and live.status == "RELEASED" and live.version > rej and w.released_version == live.version
+    assert [h.group_t for h in live.heats] == [h.group_t for h in v1.heats]
+    assert w.store.get(w.plan_id, rej).status == "REJECTED"
+    assert w.caps == {} and w.crane_hold() is None and w.sim_hold() is None   # v1's settings, crane and furnace may go on
+    assert "same mix as approved v1" in w.phone("supervisor")["plan"]["explanation"]
+    assert w.decisions[-1]["decision"] == "reinstated"
+
+
+def test_rejecting_an_unapproved_plan_does_not_reinstate_anything():
+    w = World("SIMULATED")
+    w.make_plan()
+    w.reject("Supervisor requested a new plan")   # nothing approved before it: the agent re-plans as before
+    assert [(p.version, p.status) for p in w.store.versions()] == [(1, "REJECTED"), (2, "EMAILED")]
+    assert w.decisions[-1]["decision"] == "replan"
+
+
+def test_sim_clock_waits_for_approval_and_release_of_a_change():
+    """E2E #45: heats must not tap on the old list while the agent's change waits for the supervisor and the shift leader."""
+    from fastapi.testclient import TestClient
+    import scrapchef.api.main as api
+    w = _released_with_pending_change()
+    api.world = w
+    c = TestClient(api.app)
+    r = c.post("/api/sim/step_heat").json()
+    assert r.get("waiting") and "approval" in r["note"] and w.sim_step == 0
+    w.approve()
+    if 1 in w.pending_change()[1]:   # approved but not released: heat 1's new list is not the crane's list yet
+        assert "not released" in c.post("/api/sim/step_heat").json()["note"] and w.sim_step == 0
+    w.release()
+    assert not c.post("/api/sim/step_heat").json().get("waiting") and w.sim_step == 1
+
+
+def test_a_new_plan_does_not_show_the_previous_agent_explanation():
+    """E2E #40: world.explanation belongs to the re-plan that wrote it, not to the next daily plan."""
+    w = _released_with_pending_change("SHADOW_REPLAY")
+    assert w.phone("supervisor")["plan"]["explanation"]
+    w.make_plan()
+    assert not w.phone("supervisor")["plan"].get("explanation") and w.explanation == {}

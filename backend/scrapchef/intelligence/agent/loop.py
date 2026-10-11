@@ -49,7 +49,9 @@ How to handle each event:
   with send_message. If nothing is feasible within the event's limits (never loosen a reported availability to get a feasible
   mix), call drop_plan with a reason for the supervisor saying what you tried: it informs the supervisor and withdraws the plan.
   Keep one tool call for propose_plan or drop_plan.
-- rejection: read the supervisor's reason, adjust the settings to address it, then propose (drop_plan if nothing is feasible).
+- rejection: read the supervisor's reason, adjust the settings to address it, then propose a plan that differs from the rejected
+  one. If no different feasible plan exists, call drop_plan: after a rejection it withdraws the rejected change and puts the last
+  approved plan back live (it only withdraws the whole plan if nothing was approved before).
 - question: answer in at most 3 sentences as your final message, using tool results only. Do not propose unless asked."""
 
 

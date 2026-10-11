@@ -98,6 +98,7 @@ class World:
             self.inbox: list[dict] = []   # inbound free text the agent reads (READ layer): emails, issues, questions, rejections
             self.heat_log: list[dict] = []
             self.explanation: dict = {}
+            self.version_settings: dict[int, dict] = {}   # the planning settings each version of the day was made under
             self.drift_alert: dict | None = None
             self.released_version: int | None = None
             self.pending_banner: dict | None = None
@@ -200,7 +201,9 @@ class World:
             self._expire_messages(list(self.messages), "new daily plan")
             self.progress, self.baskets_done = {}, {}
             self.released_version, self.pending_banner = None, None
+            self.explanation = {}   # agent text belongs to the day's re-plans, never to the next day's plan
             self.store.save(plan, "agent", self._ts(), trigger)
+            self.version_settings = {version: self._settings()}
             facts = dict(decision="new_plan", version=version, trigger_text="Daily 06:00 plan.", n_heats=len(plan.heats), moves=[],
                          cost_delta_per_t=0.0, new_per_t=sum(h.cost.total for h in plan.heats) / sum(h.steel_t for h in plan.heats), reason="", binding=(plan.binding[0].plain if plan.binding else ""))
             rationale = "Lowest-cost mix meeting every element limit with 95% confidence, within the mill's demonstrated recipe range."
@@ -471,6 +474,7 @@ class World:
             self.caps, self.spec_class, self.alpha = dict(cand["caps"]), cand["spec_class"], cand["alpha"]
             self.live_bounds = cand.get("bounds")   # the Control Suite's recipe check follows a relaxed re-plan
             self.ctx.limits = cfg("specs")["classes"][self.spec_class]   # Control Suite, open-heat risk and the history line follow the live spec
+            self.version_settings[new.version] = self._settings()
             self.explanation = dict(rationale)
             kept, costs = [], [cand["summary"]["cost_per_t"]]
             for a in alternatives or []:   # an option at the same cost is not a real alternative (same rule as the fallback)
@@ -487,11 +491,16 @@ class World:
 
     def drop_plan(self, reason: str, actor: str = "agent") -> PlanVersion | None:
         """No feasible plan: tell the supervisor why, then withdraw the plan completely. There is no live version afterwards,
-        the crane has no list to load and the agent stops re-planning; the next plan comes from the 06:00 cycle."""
+        the crane has no list to load and the agent stops re-planning; the next plan comes from the 06:00 cycle.
+        A rejected change with an approved version before it is not dropped: the change is withdrawn and that version is live again."""
         with self.lock:
             p = self.base_plan()
             if p is None or p.status in ("DONE", "SUPERSEDED", "DROPPED"):
                 return None
+            prev = self._last_approved(p.version) if p.status == "REJECTED" else None
+            if prev is not None:
+                self._reinstate(p, prev, reason)
+                return p
             self.notify("supervisor", f"{reason} Plan v{p.version} is dropped: no plan is live until a new one is made.")
             self.store.transition(p, "DROPPED", actor, self._ts(), reason)
             stop = f"Plan v{p.version} is dropped: no feasible charge mix. Do not load heats that are not loaded yet; wait for the supervisor."
@@ -500,6 +509,41 @@ class World:
             self.notify("shift_leader", stop)
             self._emit("plan_dropped", {"version": p.version, "reason": reason}, ["process", "email", "supervisor", "shift_leader", "crane"])
             return p
+
+    def _settings(self) -> dict:
+        return dict(caps=dict(self.caps), spec_class=self.spec_class, alpha=self.alpha, live_bounds=self.live_bounds)
+
+    def _last_approved(self, before: int) -> int | None:
+        """The newest version of the day before `before` that the supervisor approved (it may have been released since)."""
+        vs = [a["version"] for a in self.store.audit(self.plan_id)
+              if a["action"] in ("SUPERVISOR_APPROVED", "RELEASED", "LOADING") and a["version"] < before]
+        return max(vs) if vs else None
+
+    def _reinstate(self, rejected: PlanVersion, prev: int, reason: str):
+        """Rejecting a change keeps the plan the supervisor had approved: approved version `prev` comes back as a new version
+        (stored versions are never rewritten), with the settings it was made under, released again if it was the crane's list."""
+        old = self.store.get(self.plan_id, prev)
+        new = old.model_copy(deep=True)
+        released = self.released_version == prev
+        new.version, new.parent_version = self.store.next_version(old.plan_id), prev
+        new.created_by, new.created_ts, new.status = "user", self._ts(), "RELEASED" if released else "SUPERVISOR_APPROVED"
+        self.store.save(new, "supervisor", self._ts(), f"v{rejected.version} rejected: approved v{prev} reinstated")
+        if released:
+            self.released_version = new.version
+        s = self.version_settings.get(prev) or self._settings()
+        self.caps, self.spec_class, self.alpha, self.live_bounds = dict(s["caps"]), s["spec_class"], s["alpha"], s["live_bounds"]
+        self.ctx.limits = cfg("specs")["classes"][self.spec_class]
+        self.version_settings[new.version] = self._settings()
+        sup = (f"{reason} The rejected change is withdrawn: plan v{new.version}, the same mix as approved v{prev}, is live again"
+               + (" and released to the cranes." if released else "; it still needs release."))
+        ops = (f"The change in v{rejected.version} was rejected. " + (f"Keep loading from v{new.version}: the same list as v{prev}."
+               if released else f"v{new.version}, the same plan as approved v{prev}, waits for release."))
+        self.explanation = dict(email=sup, supervisor=sup, shift_leader=ops)
+        self.pending_banner = None
+        self._expire_messages(["shift_leader", "crane"], f"v{rejected.version} rejected")
+        self.notify("crane", ops)
+        self._emit("plan_reinstated", {"version": new.version, "from": prev, "rejected": rejected.version},
+                   ["process", "email", "supervisor", "shift_leader", "crane"])
 
     def notify(self, role: str, text: str, sender: str = "agent"):
         with self.lock:
@@ -666,6 +710,7 @@ class World:
             new.hand_edited = sorted(set(p.hand_edited) | {slot})
             self.store.transition(p, "SUPERSEDED", actor, self._ts(), f"manual edit of heat {slot}")
             self.store.save(new, actor, self._ts(), f"manual edit heat {slot}")
+            self.version_settings[new.version] = self.version_settings.get(p.version) or self._settings()
             self.store.transition(new, "EMAILED", actor, self._ts(), "edit saved")
             self._emit("edited", {"version": new.version, "slot": slot}, ["process", "supervisor", "shift_leader"])
             return new
@@ -709,6 +754,19 @@ class World:
         if latest.status == "REJECTED":
             return f"Plan v{latest.version} was rejected and a new plan is being made: stop loading until one is approved."
         return None
+
+    def sim_hold(self) -> str | None:
+        """Why the furnace may not tap the next heat yet: the crane may not load it (a newer version awaits approval), or the
+        heat's mix changes in a version that is not released. The sim clock waits for the people, as it waits for the agent."""
+        with self.lock:
+            hold = self.crane_hold()
+            if hold:
+                return hold
+            p, changed = self.pending_change()
+            nxt = self.sim_step + 1 if self.mode == "SIMULATED" else (self.cursor - self.plan_heat0 + 1 if self.plan_id else 0)
+            if nxt in changed:
+                return f"Heat {nxt} changes in v{p.version}, which is not released yet: release it to tap the heat."
+            return None
 
     def _check_not_pending(self, slot: int):
         hold = self.crane_hold()

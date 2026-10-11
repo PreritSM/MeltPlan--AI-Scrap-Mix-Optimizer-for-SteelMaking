@@ -75,7 +75,8 @@ SPECS: dict[str, tuple[type[BaseModel], str]] = {
                                   "Refused if it fails the anti-churn rule or the text contains numbers not in tool results."),
     "send_message": (SendMessage, "Send an information-only message to one role's phone."),
     "drop_plan": (DropPlan, "No feasible mix for the open heats: inform the supervisor with the reason, then withdraw the plan "
-                            "completely (no live plan; the crane stops loading). Only after run_optimizer returned infeasible."),
+                            "completely (no live plan; the crane stops loading). Only after run_optimizer returned infeasible. "
+                            "After a rejection it instead withdraws the rejected change and puts the last approved plan back live."),
 }
 
 
@@ -216,12 +217,20 @@ class AgentTools:
     def drop_plan(self, a: DropPlan) -> dict:
         if self.outcome.get("version"):
             raise ToolError("a plan was already proposed in this run; it cannot also be dropped")
-        if not any((self.w.candidates.get(c) or {}).get("plan") is None for c in self.candidates):
+        base = self.w.base_plan()
+        rejected = base is not None and base.status == "REJECTED"   # withdrawing a rejected change is always allowed
+        if not rejected and not any((self.w.candidates.get(c) or {}).get("plan") is None for c in self.candidates):
             raise ToolError("drop_plan needs an infeasible run_optimizer result in this run")
         self._check_text(a.reason)
         p = self.w.drop_plan(a.reason)
         if p is None:
             raise ToolError("there is no live plan to drop")
+        live = self.w.current_plan()
+        if live is not None:   # a rejected change was withdrawn and the last approved version is live again
+            self.outcome = dict(decision="reinstated", version=live.version, dropped=p.version,
+                                explanation=dict(self.w.explanation))
+            return dict(ok=True, rejected_version=p.version, live_version=live.version,
+                        status="rejected change withdrawn; the last approved plan is live again")
         self.outcome = dict(decision="dropped", dropped=p.version, explanation={"supervisor": a.reason})
         return dict(ok=True, dropped_version=p.version, status="DROPPED; supervisor informed, crane told not to load")
 

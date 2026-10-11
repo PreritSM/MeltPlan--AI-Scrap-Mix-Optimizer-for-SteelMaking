@@ -85,6 +85,9 @@ def reset(b: ResetBody):
 def step_heat():
     if world.agent_pending:     # the sim clock waits for the agent: an LLM run (~30 s) would otherwise see its heats tapped
         return dict(waiting=True, note="Agent working: the next heat waits.")
+    hold = world.sim_hold()     # ... and for the people: a proposed change is approved and released before its heats tap
+    if hold:
+        return dict(waiting=True, note=hold)
     if world.plan_finished():   # play stops at the end of the plan; "Plan 06:00" replays on to the next day's plan
         return dict(done=True, note="All heats of this plan are tapped. Press Plan 06:00 for the next plan.")
     return guard(lambda: world.step_heat() or dict(done=True))

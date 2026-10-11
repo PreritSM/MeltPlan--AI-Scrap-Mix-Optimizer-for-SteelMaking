@@ -139,5 +139,6 @@ def process_state(w) -> dict:
                 heat_strip=[dict(heatid=h["heatid"], z=h["elements"]["cu"]["z"], slot=h["slot"]) for h in w.heat_log[-60:]],
                 last_event=w.store.last_seq(), drift_alert=w.drift_alert,
                 ready_slot=min((s for s, v in w.progress.items() if v == "loaded"), default=None),   # charged, waiting for Step heat
+                sim_hold=w.sim_hold(),
                 agent=dict(busy=w.agent_pending > 0, llm=w.llm.describe(), available=w.llm.available),
                 legend=["REAL", "DERIVED", "ESTIMATED", "ASSUMED", "MOCK"], groups=GROUPS)
