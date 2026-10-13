@@ -76,12 +76,14 @@ def main() -> None:
          f"Held-out heats solved: **{len(rows)}** (estimator fit on train split only). Same-residual-risk comparison (z matched per element, floor {Z_FLOOR}).\n",
          f"**Headline: {m*100:.2f}% cheaper at the same predicted residual risk** (95% bootstrap CI [{lo*100:.2f}%, {hi*100:.2f}%]; ${per_t:.2f}/t steel).\n",
          f"Sensitivity: random ±20% group-price perturbations (3 seeds, 150 heats each): {', '.join(f'{s*100:.2f}%' for s in sens)}.\n",
-         "**Caveat:** the absolute figure depends on ASSUMED prices (research Tables H2/H3) and an availability proxy (stock = max usage within ±1 day). "
+         "**Caveat:** the absolute figure depends on ASSUMED prices (config/prices.yaml) and an availability proxy (stock = max usage within ±1 day). "
          "The mill's mix is ~85% one code, so there is little room to move; the relative result matters more than the level.\n",
          "| group | mean tonnes historical | mean tonnes LP |\n|---|---|---|"]
     for g in GROUPS:
         L.append(f"| {g} | {out['mix_hist'][g]:.1f} | {out['mix_lp'][g]:.1f} |")
-    (ROOT / "Reference_Docs" / "reports" / "backtest.md").write_text("\n".join(L))
+    report = ROOT / "reports" / "backtest.md"
+    report.parent.mkdir(exist_ok=True)
+    report.write_text("\n".join(L))
     print("\n".join(L))
 
 

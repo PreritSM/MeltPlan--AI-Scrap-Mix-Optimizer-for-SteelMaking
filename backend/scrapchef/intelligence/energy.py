@@ -1,5 +1,5 @@
 """Energy & cost model: MWh_h = b0 + sum_g b_g x_{h,g} (Huber), time-split CV vs total-charge-only (A15).
-`python -m scrapchef.intelligence.energy` -> Reference_Docs/reports/energy.md, data/energy.json."""
+`python -m scrapchef.intelligence.energy` -> reports/energy.md, data/energy.json."""
 from __future__ import annotations
 
 import json
@@ -40,15 +40,17 @@ def main() -> None:
                tariff=tariff, models=out, n=n, provenance="ESTIMATED (energy), ASSUMED (tariff)")
     (ROOT / "data" / "energy.json").write_text(json.dumps(res, indent=1))
     L = ["# Energy model report (auto-generated)\n",
-         "Target: MWh per heat = Σ MW over transformer rows (**provisional** definition, decision D13). Time split 80/20.\n",
+         "Target: MWh per heat = Σ MW over transformer rows (**provisional** definition, to be confirmed with the plant). Time split 80/20.\n",
          "| model | test R² | test MAE (MWh) |\n|---|---|---|"]
     for k_, v in out.items():
         L.append(f"| {k_} | {v['r2']:.3f} | {v['mae']:.2f} |")
-    L.append(f"\nΔR² (per-group − total) = **{lift:.3f}** → {'group effects used' if use_groups else 'collapsed to constant MWh/t (A15)'}.\n")
+    L.append(f"\nΔR² (per-group − total) = **{lift:.3f}** → {'group effects used' if use_groups else 'collapsed to constant MWh/t'}.\n")
     L.append("| group | MWh/t input | $/t (tariff $%s/MWh, ASSUMED) |\n|---|---|---|" % tariff)
     for g, c, kk in zip(GROUPS, coef, k):
         L.append(f"| {g} | {c:.3f} | {kk:.2f} |")
-    (ROOT / "Reference_Docs" / "reports" / "energy.md").write_text("\n".join(L))
+    report = ROOT / "reports" / "energy.md"
+    report.parent.mkdir(exist_ok=True)
+    report.write_text("\n".join(L))
     print("\n".join(L))
 
 

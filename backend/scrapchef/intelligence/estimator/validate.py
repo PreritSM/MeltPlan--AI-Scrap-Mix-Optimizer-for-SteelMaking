@@ -1,5 +1,5 @@
 """Fit + validate the composition estimator. `python -m scrapchef.intelligence.estimator.validate`
-writes Reference_Docs/reports/estimator.md and data/estimates.json (consumed by the optimiser)."""
+writes reports/estimator.md and data/estimates.json (consumed by the optimiser)."""
 from __future__ import annotations
 
 import json
@@ -83,8 +83,8 @@ def main() -> None:
     (ROOT / "data").mkdir(exist_ok=True)
     (ROOT / "data" / "estimates.json").write_text(json.dumps({r["element"]: r for r in res}, indent=1))
     L = ["# Composition estimator report (auto-generated)\n",
-         "Time split 70/15/15 by heat order; metrics on the last 15% (held-out). Priors are ASSUMED (Table H2 via grade_map).\n",
-         f"Metallic yield (A4, Table H2 group yields, shared with the optimiser): **{res[0]['yield_']:.3f}** effective over the cohort. Heats with a measured previous-heat chemistry: "
+         "Time split 70/15/15 by heat order; metrics on the last 15% (held-out). Priors are ASSUMED (published typical values, config/grade_map.yaml).\n",
+         f"Metallic yield (assumed group yields, shared with the optimiser): **{res[0]['yield_']:.3f}** effective over the cohort. Heats with a measured previous-heat chemistry: "
          f"{res[0]['prev_measured_frac']:.0%} (others use the trailing median as heel chemistry).\n"]
     for r in res:
         el = sym(r["element"])
@@ -99,7 +99,9 @@ def main() -> None:
             L.append(f"| {g} | {r['share'][i]:.1%} | {r['prior']['mu'][i]:.3f}±{r['prior']['sd'][i]:.3f} | {r['nnls'][i]:.3f} | "
                      f"{f['mean'][i]:.3f} ± {f['sd'][i]:.3f} | [{f['lo'][i]:.3f}, {f['hi'][i]:.3f}] | {r['recovery_cov'][i]:.0%} {'ok' if r['recovery'][i] else 'FAIL'} |")
         L.append("")
-    (ROOT / "Reference_Docs" / "reports" / "estimator.md").write_text("\n".join(L))
+    report = ROOT / "reports" / "estimator.md"
+    report.parent.mkdir(exist_ok=True)
+    report.write_text("\n".join(L))
     print("\n".join(L))
 
 

@@ -1,4 +1,4 @@
-"""Phase 0 data profiling: `python -m scrapchef.data.profile` -> Reference_Docs/reports/profile.md.
+"""Phase 0 data profiling: `python -m scrapchef.data.profile` -> reports/profile.md.
 
 Schema-agnostic first pass over the Kaggle EAF CSVs. All columns are read as text
 (decimal commas are common in this dataset) and cast explicitly where needed.
@@ -12,7 +12,7 @@ import duckdb
 
 ROOT = Path(__file__).resolve().parents[3]
 RAW = ROOT / "EAF Kaggle Dataset"
-REPORT = ROOT / "Reference_Docs" / "reports" / "profile.md"
+REPORT = ROOT / "reports" / "profile.md"
 
 # Files read in full for per-column profiling; the two huge process-signal files
 # are profiled by row count / heat coverage only.
@@ -140,7 +140,7 @@ def main() -> None:
              round(count(*)/ (date_diff('day', min(t0), max(t0))+1.0),2) heats_per_day FROM g""")
     out.append(md_table(r, c) + "\n")
 
-    out.append("## 9. Tap-weight search (A4)\n")
+    out.append("## 9. Tap-weight search\n")
     hits = []
     for name in tabs:
         for col, *_ in con.execute(f"DESCRIBE {name}").fetchall():
@@ -148,7 +148,7 @@ def main() -> None:
                 hits.append((name, col))
     out.append(md_table(hits, ["file", "candidate column"]) + "\n")
 
-    out.append("## 10. ferro.csv vs scrap codes (A7)\n")
+    out.append("## 10. ferro.csv vs scrap codes\n")
     r, c = q(con, 'SELECT MAT_CODE, Description, Cu, Sn, Ni, Mo FROM ferro ORDER BY 1')
     out.append(md_table(r, c) + "\n")
     ov = con.execute(
