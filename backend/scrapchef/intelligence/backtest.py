@@ -71,7 +71,7 @@ def main() -> None:
     X_h = np.mean([r["x_hist"] for r in rows], 0); X_l = np.mean([r["x_lp"] for r in rows], 0)
     out = dict(n_heats=len(rows), saving_pct=m * 100, ci=[lo * 100, hi * 100], usd_per_t=float(per_t), price_sensitivity_pct=[s * 100 for s in sens],
                mix_hist=dict(zip(GROUPS, X_h.tolist())), mix_lp=dict(zip(GROUPS, X_l.tolist())))
-    (ROOT / "data" / "backtest.json").write_text(json.dumps(out, indent=1))
+    (ROOT / "data" / "backtest.json").write_text(json.dumps(out, indent=1), encoding="utf-8")
     L = ["# Back-test report (auto-generated)\n",
          f"Held-out heats solved: **{len(rows)}** (estimator fit on train split only). Same-residual-risk comparison (z matched per element, floor {Z_FLOOR}).\n",
          f"**Headline: {m*100:.2f}% cheaper at the same predicted residual risk** (95% bootstrap CI [{lo*100:.2f}%, {hi*100:.2f}%]; ${per_t:.2f}/t steel).\n",
@@ -83,7 +83,7 @@ def main() -> None:
         L.append(f"| {g} | {out['mix_hist'][g]:.1f} | {out['mix_lp'][g]:.1f} |")
     report = ROOT / "reports" / "backtest.md"
     report.parent.mkdir(exist_ok=True)
-    report.write_text("\n".join(L))
+    report.write_text("\n".join(L), encoding="utf-8")
     print("\n".join(L))
 
 

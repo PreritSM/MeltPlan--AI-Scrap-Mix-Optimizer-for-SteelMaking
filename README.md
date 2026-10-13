@@ -247,6 +247,75 @@ Open **http://localhost:5173**. The agent runs in fallback mode until you [confi
 
 > The API process is the single owner of the operational database (`data/app.sqlite`). Scripts or notebooks that create a simulation `World` get a private in-memory store instead.
 
+### Running on Windows
+
+`make` is not installed on Windows by default, so run the commands behind each Makefile target directly in **PowerShell** (Windows 10/11).
+
+**Prerequisites**
+
+```powershell
+# Python 3.12+ (or install from python.org; tick "Add python.exe to PATH")
+winget install Python.Python.3.12
+# Node.js 18+ (LTS)
+winget install OpenJS.NodeJS.LTS
+# uv
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+Close and reopen PowerShell afterwards so `python`, `node`, `npm` and `uv` are on your `PATH`. Check with `uv --version` and `node --version`.
+
+Put the Kaggle CSVs in `EAF Kaggle Dataset\` at the repository root, as in [step 1](#1-get-the-data).
+
+**Install, build the warehouse and fit the models (once)**, from the repository root:
+
+```powershell
+# make setup
+cd backend;  uv sync --group dev;  cd ..
+cd frontend; npm install;          cd ..
+
+# make fit
+cd backend
+uv run python -m scrapchef.data.ingest
+uv run python -m scrapchef.intelligence.estimator.validate
+uv run python -m scrapchef.intelligence.energy
+
+# make backtest
+uv run python -m scrapchef.intelligence.backtest
+
+# optional: make profile
+uv run python -m scrapchef.data.profile
+cd ..
+```
+
+**Run**, in two PowerShell windows:
+
+```powershell
+# window 1 — make api
+cd backend
+uv run uvicorn scrapchef.api.main:app --port 8000
+```
+
+```powershell
+# window 2 — make web
+cd frontend
+npm run dev
+```
+
+Open **http://localhost:5173**.
+
+**Test** (`make test`):
+
+```powershell
+cd backend;  uv run pytest -q;   cd ..
+cd frontend; npx tsc --noEmit;   cd ..
+```
+
+Windows notes:
+- If PowerShell refuses to run `npm`/`npx` with *"running scripts is disabled on this system"*, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once, or use `npm.cmd` / `npx.cmd`.
+- Environment variables are set with `$env:NAME = "value"` in PowerShell (for example `$env:SCRAPCHEF_LLM = "off"`), or put them in `backend\.env`.
+- If Windows Firewall asks about Python or Node when the servers start, allowing private networks is enough; both only listen on `localhost`.
+- Alternatively, install `make` (`winget install GnuWin32.Make`, or use Git Bash / WSL) and use the `make` targets above unchanged.
+
 ---
 
 ## Demo walkthrough

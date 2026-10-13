@@ -81,7 +81,7 @@ def run_element(el: str) -> dict:
 def main() -> None:
     res = [run_element(el) for el in ELEMENTS]
     (ROOT / "data").mkdir(exist_ok=True)
-    (ROOT / "data" / "estimates.json").write_text(json.dumps({r["element"]: r for r in res}, indent=1))
+    (ROOT / "data" / "estimates.json").write_text(json.dumps({r["element"]: r for r in res}, indent=1), encoding="utf-8")
     L = ["# Composition estimator report (auto-generated)\n",
          "Time split 70/15/15 by heat order; metrics on the last 15% (held-out). Priors are ASSUMED (published typical values, config/grade_map.yaml).\n",
          f"Metallic yield (assumed group yields, shared with the optimiser): **{res[0]['yield_']:.3f}** effective over the cohort. Heats with a measured previous-heat chemistry: "
@@ -101,7 +101,7 @@ def main() -> None:
         L.append("")
     report = ROOT / "reports" / "estimator.md"
     report.parent.mkdir(exist_ok=True)
-    report.write_text("\n".join(L))
+    report.write_text("\n".join(L), encoding="utf-8")
     print("\n".join(L))
 
 

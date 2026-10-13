@@ -1,16 +1,27 @@
 """ACT layer: plan versions, approval state machine, audit log, events (SQLite)."""
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import sqlite3
+import sys
 import threading
 import uuid
 from pathlib import Path
 
 from scrapchef.contracts.models import PlanVersion
 from scrapchef.data.store import ROOT  # noqa: F401  (tests repoint it; the store itself no longer defaults to a file)
+
+if sys.platform == "win32":
+    import msvcrt
+
+    def _try_lock(fd: int) -> None:
+        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)   # raises OSError when another process holds the byte
+else:
+    import fcntl
+
+    def _try_lock(fd: int) -> None:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)   # raises BlockingIOError (an OSError) when held
 
 ALLOWED = {
     "PROPOSED": {"EMAILED", "SUPERSEDED", "REJECTED", "DROPPED"},
@@ -34,8 +45,8 @@ def _own(db: Path) -> None:
         return
     fd = os.open(key + ".lock", os.O_RDWR | os.O_CREAT, 0o644)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
+        _try_lock(fd)
+    except OSError:
         os.close(fd)
         raise RuntimeError(f"{db} is owned by another running ScrapChef process (the API). "
                            "Use World() without store_path for scripts.") from None

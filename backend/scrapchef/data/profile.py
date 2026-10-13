@@ -162,7 +162,7 @@ def main() -> None:
     out.append(md_table(r, c) + "\n")
 
     REPORT.parent.mkdir(exist_ok=True)
-    REPORT.write_text("\n".join(out))
+    REPORT.write_text("\n".join(out), encoding="utf-8")
     print(f"wrote {REPORT}")
 
 

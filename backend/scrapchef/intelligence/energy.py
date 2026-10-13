@@ -38,7 +38,7 @@ def main() -> None:
     k = (tariff * coef).tolist()
     res = dict(use_group_effects=bool(use_groups), delta_r2=float(lift), mwh_per_t=coef.tolist(), k_usd_per_t=k,
                tariff=tariff, models=out, n=n, provenance="ESTIMATED (energy), ASSUMED (tariff)")
-    (ROOT / "data" / "energy.json").write_text(json.dumps(res, indent=1))
+    (ROOT / "data" / "energy.json").write_text(json.dumps(res, indent=1), encoding="utf-8")
     L = ["# Energy model report (auto-generated)\n",
          "Target: MWh per heat = Σ MW over transformer rows (**provisional** definition, to be confirmed with the plant). Time split 80/20.\n",
          "| model | test R² | test MAE (MWh) |\n|---|---|---|"]
@@ -50,7 +50,7 @@ def main() -> None:
         L.append(f"| {g} | {c:.3f} | {kk:.2f} |")
     report = ROOT / "reports" / "energy.md"
     report.parent.mkdir(exist_ok=True)
-    report.write_text("\n".join(L))
+    report.write_text("\n".join(L), encoding="utf-8")
     print("\n".join(L))
 
 

@@ -8,7 +8,7 @@ from scrapchef.data.store import GROUPS, ROOT, connect, cfg
 
 def _j(name):
     f = ROOT / "data" / name
-    return json.loads(f.read_text()) if f.exists() else None
+    return json.loads(f.read_text(encoding="utf-8")) if f.exists() else None
 
 
 def card(id, lane, title, prov, state, inputs, outputs, inspector=None):

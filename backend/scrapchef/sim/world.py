@@ -874,4 +874,4 @@ def _load(name: str):
     import json
     from scrapchef.data.store import ROOT
     f = ROOT / "data" / name
-    return json.loads(f.read_text()) if f.exists() else None
+    return json.loads(f.read_text(encoding="utf-8")) if f.exists() else None

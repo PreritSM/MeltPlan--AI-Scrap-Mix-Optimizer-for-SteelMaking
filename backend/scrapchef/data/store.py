@@ -16,7 +16,7 @@ GROUPS = ["SCRAP_3A", "SCRAP_16A_6A", "SCRAP_25A_3ACH", "IRON_UNITS"]
 
 
 def cfg(name: str) -> dict:
-    return yaml.safe_load((CFG / f"{name}.yaml").read_text())
+    return yaml.safe_load((CFG / f"{name}.yaml").read_text(encoding="utf-8"))
 
 
 def connect(read_only: bool = True) -> duckdb.DuckDBPyConnection:

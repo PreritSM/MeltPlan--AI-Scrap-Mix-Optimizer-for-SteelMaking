@@ -26,8 +26,8 @@ def csv(f: str) -> str:
 
 
 def build(db: Path = DB, raw_dir: Path = RAW) -> duckdb.DuckDBPyConnection:
-    mill = yaml.safe_load((CFG / "mill.yaml").read_text())
-    gm = yaml.safe_load((CFG / "grade_map.yaml").read_text())
+    mill = yaml.safe_load((CFG / "mill.yaml").read_text(encoding="utf-8"))
+    gm = yaml.safe_load((CFG / "grade_map.yaml").read_text(encoding="utf-8"))
     db.parent.mkdir(exist_ok=True)
     con = duckdb.connect(str(db))
     for t in con.execute("SHOW TABLES").fetchall():

@@ -25,7 +25,7 @@ class Estimates:
     @classmethod
     def load(cls, variant: str = "final") -> "Estimates":
         """variant 'final' = fit on all cohort heats; 'boot_train' = train-split only (back-test, no leakage)."""
-        raw = json.loads((ROOT / "data" / "estimates.json").read_text())
+        raw = json.loads((ROOT / "data" / "estimates.json").read_text(encoding="utf-8"))
         g = lambda k: {e: np.array(raw[e][variant][k]) for e in ELS}
         return cls(g("mean"), g("sd"), g("cov"), {e: raw[e]["sigma_eps"] for e in ELS})
 
@@ -47,7 +47,7 @@ class Context:
 def make_context(spec_class: str | None = None, inventory=None, variant: str = "final") -> Context:
     pr, sp, mill = cfg("prices"), cfg("specs"), cfg("mill")
     en = ROOT / "data" / "energy.json"
-    energy_k = np.array(json.loads(en.read_text())["k_usd_per_t"]) if en.exists() else np.zeros(len(GROUPS))
+    energy_k = np.array(json.loads(en.read_text(encoding="utf-8"))["k_usd_per_t"]) if en.exists() else np.zeros(len(GROUPS))
     return Context(
         est=Estimates.load(variant), energy_k=energy_k,
         prices=np.array([pr["groups"][g] for g in GROUPS], float),
