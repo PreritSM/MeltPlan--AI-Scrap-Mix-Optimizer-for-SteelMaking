@@ -5,11 +5,17 @@ import Inspector from "./Inspector";
 
 const LANES: [string, string][] = [["read", "Read layer"], ["data", "Data layer"], ["intelligence", "Intelligence layer"], ["act", "Act layer"]];
 
+// Turns a card's inputs or outputs into a one-line summary.
+// Includes only scalar values, formatting numbers compactly.
+// Returns 'key: value' pairs joined by dots.
 function summarize(o: any) {
   return Object.entries(o ?? {}).filter(([, v]) => v !== null && v !== undefined && typeof v !== "object")
     .map(([k, v]) => `${k.replace(/_/g, " ")}: ${typeof v === "number" ? (Number.isInteger(v) ? v : f(v as number, 3)) : v}`).join(" · ");
 }
 
+// Top control bar of the Process View.
+// Shows the clock, mode and agent status with plan, play, step, scenario and reset controls.
+// Also shows the heat surprise strip and the provenance legend.
 function TopBar() {
   const { state, act, playing, setPlaying } = useSim();
   if (!state) return null;
@@ -43,6 +49,9 @@ function TopBar() {
   );
 }
 
+// Main Process View: four lanes of stage cards (read, data, intelligence, act).
+// Pulses the lanes briefly on each new event.
+// Clicking a card opens it in the inspector drawer.
 export default function ProcessView() {
   const { state, inspect, setInspect, pulse } = useSim();
   const [pl, setPl] = useState(false);

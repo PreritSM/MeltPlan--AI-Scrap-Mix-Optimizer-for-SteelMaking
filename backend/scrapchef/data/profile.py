@@ -19,11 +19,17 @@ REPORT = ROOT / "reports" / "profile.md"
 BIG = {"eaf_gaslance_mat.csv", "inj_mat.csv"}
 
 
+# Builds an SQL expression casting a decimal-comma text column to DOUBLE.
+# Commas are replaced with dots before a TRY_CAST.
+# Returns the SQL fragment as a string.
 def num(col: str) -> str:
     """SQL expression casting a text column with decimal comma to DOUBLE."""
     return f"TRY_CAST(REPLACE({col}, ',', '.') AS DOUBLE)"
 
 
+# Registers a raw CSV file as a DuckDB view.
+# The view is named after the file stem and reads every column as text.
+# Returns the view name.
 def table(con: duckdb.DuckDBPyConnection, f: Path) -> str:
     name = f.stem
     con.execute(
@@ -33,6 +39,9 @@ def table(con: duckdb.DuckDBPyConnection, f: Path) -> str:
     return name
 
 
+# Formats rows and column names as a Markdown table.
+# None values are rendered as empty cells.
+# Returns the table as a string.
 def md_table(rows, cols) -> str:
     out = ["| " + " | ".join(cols) + " |", "|" + "---|" * len(cols)]
     for r in rows:
@@ -40,11 +49,17 @@ def md_table(rows, cols) -> str:
     return "\n".join(out)
 
 
+# Runs an SQL query on a connection.
+# Collects all result rows and the column names.
+# Returns (rows, column names).
 def q(con, sql):
     cur = con.execute(sql)
     return cur.fetchall(), [d[0] for d in cur.description]
 
 
+# Profiles the raw Kaggle EAF CSV files.
+# Covers files, join coverage, charges, codes, baskets, chemistry, energy and time gaps.
+# Writes the result to reports/profile.md.
 def main() -> None:
     con = duckdb.connect()
     files = sorted(RAW.glob("*.csv"))

@@ -10,14 +10,23 @@ from .templates import render
 AUDIENCES = ("email", "supervisor", "shift_leader", "crane")
 
 
+# Extracts all numbers from a string in a normalised form.
+# Strips signs and trailing zeros so '1.50' and '1.5' compare equal.
+# Returns the set of number strings.
 def _numbers(s: str) -> set[str]:
     return {n.lstrip("+-").rstrip("0").rstrip(".") if "." in n else n.lstrip("+-") for n in re.findall(r"[-+]?\d+(?:\.\d+)?", s)}
 
 
+# Collects every number that appears in a nested fact structure.
+# Adds rounded forms (0-4 decimals) and percentage forms of fractions.
+# Returns the set of allowed number strings for the faithfulness check.
 def fact_numbers(f) -> set[str]:
     """Every number in a nested structure, as given and rounded to 0-4 decimals; fractions also as percentages (0.05 -> 5)."""
     out: set[str] = set()
 
+    # Recursively visits dicts, lists and scalars in the facts.
+    # Adds numbers from ints, floats and strings to the output set.
+    # Booleans and None are ignored.
     def walk(v):
         if isinstance(v, dict):
             for k, x in v.items():
@@ -39,12 +48,18 @@ def fact_numbers(f) -> set[str]:
     return out
 
 
+# Finds numbers in a text that are not backed by the facts.
+# facts can be a nested structure or a precomputed number set.
+# Returns the sorted list of unsupported numbers.
 def unsupported(text: str, facts) -> list[str]:
     """Numbers in `text` that do not appear in `facts` (a nested structure, or a precomputed set from fact_numbers)."""
     allowed = facts if isinstance(facts, set) else fact_numbers(facts)
     return sorted(_numbers(text) - allowed)
 
 
+# Checks that every number in a text appears in the facts.
+# Used to reject LLM output that invents or computes numbers.
+# Returns True when there are no unsupported numbers.
 def faithful(text: str, facts) -> bool:
     """True if every number in `text` appears in `facts`."""
     return not unsupported(text, facts)
@@ -54,6 +69,9 @@ SYSTEM = ("You explain steel scrap charge-plan changes to a plant audience. Use 
           "or introduce any number not in the JSON. Never mention prices or costs to the crane audience. Max 2 sentences.")
 
 
+# Produces per-audience explanation text for a decision's facts.
+# Tries the LLM first and keeps its text only if faithful (and price-free for the crane).
+# Falls back to templates and records which narrator was used per audience.
 def narrate(facts: dict, llm=None) -> dict:
     """Returns {text: {audience: str}, narrator: {audience: 'llm'|'template'}}. Uses the LLM only if given and available."""
     out, used = {}, {}

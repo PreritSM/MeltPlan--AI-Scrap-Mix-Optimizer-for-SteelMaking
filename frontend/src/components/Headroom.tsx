@@ -1,7 +1,13 @@
 import { sym } from "../format";
 
+// Shows an element's predicted chemistry against its spec limit.
+// Prints mean, P95, limit and exceedance probability above a bar.
+// The bar turns red only when P95 is genuinely over the limit.
 export function Headroom({ el, p }: { el: string; p: { mean: number; p95: number; limit: number; p_exceed: number } }) {
   const max = Math.max(p.limit * 1.25, p.p95 * 1.05);
+  // Converts a concentration into a CSS percentage along the bar.
+  // Scales by the bar's maximum and caps at 100%.
+  // Returns a width / left string.
   const pct = (v: number) => `${Math.min(100, (v / max) * 100)}%`;
   const over = p.p95 > p.limit * 1.001;   // a binding chance constraint puts P95 exactly on the limit; that is not over
   return (

@@ -19,6 +19,9 @@ NEG = r"\b(no|none|empty|unavailable|out of|zero|not available|run out|ran out|w
 QTY = r"(\d+(?:\.\d+)?)\s*(?:t|tonnes?|tons?)\b"
 
 
+# Interprets a free-text issue into optimiser settings.
+# Detects grade groups by alias, then a tonnage cap or an exclusion keyword.
+# Returns (settings, plain description), or ({}, '') if nothing was understood.
 def parse_issue(text: str) -> tuple[dict, str]:
     """Free text -> optimiser settings, with a plain description of the interpretation ('' if nothing understood)."""
     t = text.lower()
@@ -36,6 +39,9 @@ def parse_issue(text: str) -> tuple[dict, str]:
     return {}, ""
 
 
+# Searches for feasible re-plans from least to most relaxed settings.
+# Tries as asked, then relaxed recipe bounds, a looser spec and finally 10% risk.
+# Returns up to three feasible options with distinct costs.
 def explore(tools, base: dict, include_base: bool = True) -> list[dict]:
     """Least-relaxed first: as asked, then relax recipe bounds, then a looser spec, then a higher risk level. Up to 3 feasible."""
     seq = [base, {**base, "relax_recipe_bounds": True}, {**base, "relax_recipe_bounds": True, "spec_class": "plant_tight"},
@@ -50,6 +56,9 @@ def explore(tools, base: dict, include_base: bool = True) -> list[dict]:
     return feasible
 
 
+# Proposes a candidate plan with template-narrated explanations.
+# Builds the decision facts, narrates them and calls the propose_plan tool.
+# Returns the decision record, or an infeasible outcome if proposing failed.
 def _publish(w, tools, cand: dict, trigger_text: str, alternatives: list[str]) -> dict:
     facts = dict(decision="replan", version=w.store.next_version(w.plan_id), trigger_text=trigger_text,
                  n_heats=len(cand.get("open_slots") or []), moves=cand.get("moves", []),
@@ -64,6 +73,9 @@ def _publish(w, tools, cand: dict, trigger_text: str, alternatives: list[str]) -
     return dict(decision="replan", version=out["version"], explanation=nar["text"], narrator=nar["narrator"], facts=facts)
 
 
+# Handles the case where no feasible option exists.
+# Withdraws the plan via drop_plan, or just messages the supervisor if none exists.
+# Returns the resulting decision record.
 def _drop(tools, msg: str) -> dict:
     """Nothing feasible: inform the supervisor and withdraw the plan. If there is no plan to drop, the message alone goes out."""
     out = tools.call("drop_plan", dict(reason=msg))
@@ -75,6 +87,9 @@ def _drop(tools, msg: str) -> dict:
     return dict(decision="dropped", reason="no feasible option", explanation={"supervisor": msg})
 
 
+# Deterministic agent policy used when the LLM is unavailable or fails.
+# Handles questions, lab surprises / drift, issues and rejections with fixed rules.
+# Always returns a visible decision record, never silence.
 def fallback(w, ev: dict, tools, reason: str = "") -> dict:
     kind, text, role = ev["kind"], ev["text"], ev.get("role")
     if kind == "question":
@@ -127,6 +142,9 @@ def fallback(w, ev: dict, tools, reason: str = "") -> dict:
     return dict(decision="message", reason=f"unhandled event kind {kind}")
 
 
+# Checks an LLM chat answer against the outgoing-text guards.
+# Applies the no-cost and crane rules based on the asking role.
+# Returns the reason it fails, or an empty string if it passes.
 def answer_problem(text: str, tools) -> str:
     """Why an LLM answer to a question fails the guards that apply to any outgoing text ('' if it passes)."""
     if not text:
@@ -139,5 +157,8 @@ def answer_problem(text: str, tools) -> str:
         return str(e).replace(", then call the tool again", "")
 
 
+# Checks whether an LLM chat answer passes all guards.
+# Thin wrapper around answer_problem.
+# Returns True when there is no problem.
 def faithful_answer(text: str, tools) -> bool:
     return not answer_problem(text, tools)

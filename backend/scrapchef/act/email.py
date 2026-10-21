@@ -8,10 +8,16 @@ from scrapchef.data.store import GROUPS
 from scrapchef.intelligence.estimator.massbalance import sym
 
 
+# Formats a dollar amount with an explicit sign.
+# For example 1.5 becomes '+$1.50' and -2 becomes '-$2.00'.
+# Returns the formatted string.
 def _usd(v: float) -> str:
     return f"{'+' if v >= 0 else '-'}${abs(v):.2f}"
 
 
+# Builds the cost section lines of the plan email.
+# With a risk match it compares the plan to the historical mix at the same risk.
+# Otherwise it gives a simple (not risk-matched) delta vs the baseline.
 def _cost_lines(per_t: float, baseline_per_t: float | None, rm: dict | None) -> list[str]:
     if rm:
         h, m = rm["hist_per_t"], rm["matched_per_t"]
@@ -22,6 +28,9 @@ def _cost_lines(per_t: float, baseline_per_t: float | None, rm: dict | None) -> 
     return [f"({per_t - baseline_per_t:+.2f} vs historical mix ${baseline_per_t:.2f}/t, not risk-matched)", ""] if baseline_per_t else [""]
 
 
+# Writes one plain-language summary of net cost vs the historical mix.
+# Also states how the worst element's breach risk changes under the plan.
+# Returns the sentence for the end of the cost section.
 def _bottom_line(per_t: float, rm: dict) -> str:
     """One plain-language line: net cost against the historical mix and what it buys in breach risk."""
     net, el = per_t - rm["hist_per_t"], sym(rm["worst_el"])
@@ -31,6 +40,9 @@ def _bottom_line(per_t: float, rm: dict) -> str:
     return f"Net effect against the historical mix: about {_usd(net)}/t. {pay} and {risk}."
 
 
+# Renders the daily plan email for the day-shift supervisor.
+# Includes tonnage by group, cost comparison, worst-heat P95 headroom and binding constraints.
+# Returns a dict with recipient, subject, body and plan identifiers.
 def render(plan: PlanVersion, date: str, baseline_per_t: float | None, rationale: str, risk_match: dict | None = None,
            tapped: list[int] | None = None) -> dict:
     tot_t = sum(h.steel_t for h in plan.heats)

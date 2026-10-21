@@ -16,6 +16,9 @@ from .estimator.massbalance import build
 from .optimizer.evaluate import Z_FLOOR, z_hist
 from .optimizer.model import ELS, make_context, predict_heat, solve, z_of
 
+# Runs the historical back-test over the held-out heats.
+# For each heat, matches the historical mix's risk and solves the optimiser at that risk.
+# Returns per-heat rows with historical and optimised costs and mixes.
 def run(price_noise: float = 0.0, seed: int = 0, max_heats: int | None = None):
     ctx = make_context(variant="boot_train")
     rng = np.random.default_rng(seed)
@@ -53,6 +56,9 @@ def run(price_noise: float = 0.0, seed: int = 0, max_heats: int | None = None):
     return rows
 
 
+# Computes the headline relative saving from back-test rows.
+# Averages the per-heat saving and bootstraps a 95% confidence interval.
+# Returns (mean, lower, upper) as fractions.
 def headline(rows, seed=0):
     s = np.array([(r["cost_hist"] - r["cost_lp"]) / r["cost_hist"] for r in rows])
     rng = np.random.default_rng(seed)
@@ -60,6 +66,9 @@ def headline(rows, seed=0):
     return float(s.mean()), float(np.quantile(boots, 0.025)), float(np.quantile(boots, 0.975))
 
 
+# Runs the back-test and price-sensitivity checks end to end.
+# Writes data/backtest.json with savings, CI and average mixes.
+# Writes and prints the reports/backtest.md summary.
 def main() -> None:
     rows = run()
     m, lo, hi = headline(rows)

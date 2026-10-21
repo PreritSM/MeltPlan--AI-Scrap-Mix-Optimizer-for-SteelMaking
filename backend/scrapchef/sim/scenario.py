@@ -3,6 +3,9 @@ the 3A recipe floor (demonstrated practice), so the plain re-plan is infeasible 
 from __future__ import annotations
 
 
+# Builds the scripted supplier email for the demo disruption.
+# Sums the 3A tonnes planned for still-open heats and caps supply at ~85% of that.
+# Returns the email text, which forces the agent to explore beyond a plain re-plan.
 def supplier_email(world) -> str:
     plan = world.base_plan()
     open_slots = (world.open_eval(plan) or {}).get("open_slots") or []

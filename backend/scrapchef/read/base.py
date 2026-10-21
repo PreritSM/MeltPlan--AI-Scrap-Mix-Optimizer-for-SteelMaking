@@ -50,20 +50,35 @@ class HandlingEvent(BaseModel):
 
 
 class InventorySource(Protocol):
+    # Protocol: return yard inventory per grade group at a time.
+    # Implemented by real or mock inventory adapters.
+    # Returns a list of InventoryItem records.
     def snapshot(self, ts: str) -> list[InventoryItem]: ...
 
 
 class PriceSource(Protocol):
+    # Protocol: return price quotes per grade group at a time.
+    # Implemented by real or assumed price adapters.
+    # Returns a list of PriceQuote records.
     def quotes(self, ts: str) -> list[PriceQuote]: ...
 
 
 class DeliverySource(Protocol):
+    # Protocol: return scrap delivery events since a time.
+    # Implemented by real or mock delivery adapters.
+    # Returns a list of DeliveryEvent records.
     def events(self, since: str) -> list[DeliveryEvent]: ...
 
 
 class ScheduleSource(Protocol):
+    # Protocol: return the scheduled heats from a start time.
+    # Implemented by real or mock schedule adapters.
+    # Returns a list of ScheduledHeat records.
     def horizon(self, ts: str) -> list[ScheduledHeat]: ...
 
 
 class HandlingEventSource(Protocol):
+    # Protocol: return crane handling events since a time.
+    # Implemented by real or mock handling adapters.
+    # Returns a list of HandlingEvent records.
     def events(self, since: str) -> list[HandlingEvent]: ...

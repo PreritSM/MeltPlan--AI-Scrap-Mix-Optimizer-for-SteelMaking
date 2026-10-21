@@ -4,6 +4,9 @@ from __future__ import annotations
 from .templates import pretty
 
 
+# Finds the newest decision explanation that a role is allowed to see.
+# Walks decisions newest first; non-crane roles may fall back to other roles' text.
+# Returns the explanation string, or None if there is none.
 def _last_explanation(world, role: str) -> str | None:
     """The newest agent or plan explanation this role may see (the crane only gets crane text)."""
     for d in reversed(world.decisions):
@@ -17,6 +20,9 @@ def _last_explanation(world, role: str) -> str | None:
     return None
 
 
+# Answers a chat question from structured plan state only (no computation by an LLM).
+# Matches keywords for why / cost / risk and collects up to three relevant facts.
+# Falls back to a tonnage summary of the current plan when nothing matches.
 def answer(world, role: str, text: str) -> str:
     """Up to three facts that match the question: the latest explanation (why), cost vs history, worst-case Cu."""
     p = world.current_plan()

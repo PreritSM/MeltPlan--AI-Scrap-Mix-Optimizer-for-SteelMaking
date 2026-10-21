@@ -16,15 +16,24 @@ DB = ROOT / "data" / "warehouse.duckdb"
 CFG = Path(__file__).resolve().parents[1] / "config"
 
 
+# Builds an SQL expression that parses a decimal-comma text column as DOUBLE.
+# Commas are replaced with dots before a TRY_CAST.
+# Returns the SQL fragment as a string.
 def N(c: str) -> str:
     return f"TRY_CAST(REPLACE({c}, ',', '.') AS DOUBLE)"
 
 
+# Builds an SQL read_csv() call for a raw dataset file.
+# All columns are read as text and malformed rows are tolerated.
+# Returns the SQL fragment as a string.
 def csv(f: str) -> str:
     return (f"read_csv('{RAW / f}', all_varchar=true, header=true, ignore_errors=true, "
             f"strict_mode=false, null_padding=true)")
 
 
+# Builds the DuckDB warehouse from the raw Kaggle CSV files.
+# Creates staging, grade map, heat, chemistry, energy and basket tables, logging DQ issues.
+# Removes dropped-code heats, defines the analysis cohort and returns the connection.
 def build(db: Path = DB, raw_dir: Path = RAW) -> duckdb.DuckDBPyConnection:
     mill = yaml.safe_load((CFG / "mill.yaml").read_text())
     gm = yaml.safe_load((CFG / "grade_map.yaml").read_text())
@@ -155,6 +164,9 @@ def build(db: Path = DB, raw_dir: Path = RAW) -> duckdb.DuckDBPyConnection:
     return con
 
 
+# Runs the ingestion pipeline from the command line.
+# Prints the row count of each warehouse table.
+# Also prints a summary of data-quality issues by rule.
 def main() -> None:
     con = build()
     for t in ["stg_charge", "heat_fact", "heat_charge_group", "heat_charge_basket", "heat_chem",

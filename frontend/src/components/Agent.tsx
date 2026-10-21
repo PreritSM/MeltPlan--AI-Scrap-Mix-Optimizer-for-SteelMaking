@@ -1,14 +1,18 @@
 import { useState } from "react";
 import { useSim } from "../store/sim";
 
-/** Information-only messages the agent sent to this role. */
+// Shows the information-only messages the agent sent to this role.
+// Displays the three newest, newest first, with sender and time.
+// Renders nothing when there are no messages.
 export function AgentMessages({ items }: { items?: any[] }) {
   if (!items?.length) return null;
   return (<>{items.slice().reverse().slice(0, 3).map((m: any, i: number) => (
     <div key={i} className="mail msg"><div className="small">{m.sender === "agent" ? "Agent" : m.sender} · {m.ts?.slice(11, 16)}</div>{m.text}</div>))}</>);
 }
 
-/** Question box + thread; the agent answers asynchronously (the reply arrives through the event stream). */
+// Question box and chat thread for talking to the agent.
+// Sends questions via /api/chat; replies arrive through the event stream.
+// Shows the last four messages and an 'Agent working' hint while busy.
 export function ChatThread({ role, items, placeholder }: { role: string; items?: any[]; placeholder: string }) {
   const { act } = useSim();
   const busy = useSim((s) => s.phone?.[role as "supervisor"]?.agent_busy);
@@ -23,7 +27,9 @@ export function ChatThread({ role, items, placeholder }: { role: string; items?:
   </div>);
 }
 
-/** Free-text operational issue ("only 590 t of 3A left", "basket 2 out of service"); the agent interprets it. */
+// Free-text box for reporting an operational issue.
+// Posts the text to /api/report/issue for the agent to interpret.
+// Clears the input after sending.
 export function IssueBox({ role, placeholder }: { role: string; placeholder: string }) {
   const { act } = useSim();
   const [t, setT] = useState("");

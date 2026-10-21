@@ -9,6 +9,9 @@ import CraneView from "./CraneView";
 const W = 390, H = 844;
 const GLYPH: Record<Role, string> = { email: "✉️", supervisor: "🧑‍💼", shift_leader: "👷", crane: "🏗️" };
 
+// Renders the simulated phone with a home screen of role apps.
+// Scales the phone to fit the pane and shows toasts for new events.
+// Opens the selected role's view, showing only what that role may see.
 export default function PhonePane() {
   const ref = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(0.8);
@@ -27,6 +30,9 @@ export default function PhonePane() {
 
   const unreadMail = (phone.email?.emails ?? []).filter((m: any) => !m.read).length;
   const time = state?.clock?.slice(11, 16) ?? "--:--";
+  // Returns the unread count to show on a role's icon.
+  // Email counts unread mails; other roles use the store's unread counters.
+  // Zero hides the badge.
   const badge = (r: Role) => (r === "email" ? unreadMail : unread[r]);
 
   return (

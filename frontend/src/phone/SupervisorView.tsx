@@ -5,9 +5,14 @@ import { Headroom } from "../components/Headroom";
 import { AgentMessages, ChatThread } from "../components/Agent";
 import { sym } from "../format";
 
+// Formats a number as a dollar amount with two decimals.
+// For example 12.5 becomes "$12.50".
+// Returns the formatted string.
 const money = (v: number) => `$${v.toFixed(2)}`;
 
-/** Same wording as the email's bottom line (act/email.py _bottom_line). */
+// Builds the plain-language net-effect line for the supervisor.
+// States the net cost vs the historical mix and the change in breach risk.
+// Matches the wording of the plan email's bottom line.
 function bottomLine(perT: number, rm: any) {
   const net = perT - rm.hist_per_t, el = sym(rm.worst_el);
   const a = Math.round(rm.worst_p * 100), b = Math.round(rm.plan_worst_p * 100);
@@ -16,9 +21,14 @@ function bottomLine(perT: number, rm: any) {
   return `Net effect against the historical mix: about ${net >= 0 ? "+" : "-"}${money(Math.abs(net))}/t. ${pay} and ${risk}.`;
 }
 
-/** Why a heat can no longer be hand-edited (mirrors World._edit_lock), or null. */
+// Explains why a heat can no longer be hand-edited.
+// Returns frozen, tapped, loading or loaded; mirrors World._edit_lock.
+// Returns null when the heat is editable.
 const lockOf = (h: any) => (h.frozen ? "frozen" : ["tapped", "loading", "loaded"].includes(h.progress) ? h.progress : null);
 
+// Control Suite: hand-edit one heat's mix with sliders.
+// Re-evaluates the mix live and shows cost, headroom and all violations.
+// Saves the edit as a new plan version when allowed.
 function ControlSuite({ plan, groups, onClose }: { plan: any; groups: string[]; onClose: () => void }) {
   const { act } = useSim();
   const [slot, setSlot] = useState(() => plan.heats.find((h: any) => !lockOf(h))?.slot ?? 1);
@@ -59,6 +69,9 @@ function ControlSuite({ plan, groups, onClose }: { plan: any; groups: string[]; 
   </div>);
 }
 
+// Phone screen for the supervisor.
+// Shows plan cost vs history, alternatives, headroom, binding constraints and back-test.
+// Lets them approve, edit, reject and ask the agent.
 export default function SupervisorView() {
   const { phone, state, act } = useSim();
   const v = phone.supervisor; const plan = v?.plan;

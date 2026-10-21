@@ -16,6 +16,9 @@ from scrapchef.data.store import GROUPS, cfg, group_yields, heat_table
 ELEMENTS = ["cu", "sn", "ni", "mo"]
 
 
+# Converts a lowercase element key into its chemical symbol form.
+# For example 'cu' becomes 'Cu'.
+# Used only for display; keys stay lowercase elsewhere.
 def sym(el: str) -> str:
     """Display form of an element key: "cu" -> "Cu". Keys stay lowercase everywhere else."""
     return el[:1].upper() + el[1:]
@@ -33,6 +36,9 @@ class Design:
     yield_: float            # effective metallic yield over the cohort (tapped / charged), for the report
 
 
+# Builds the mass-balance regression design for one element.
+# Computes tap and bath mass from group yields plus the heel, and the heel chemistry.
+# Returns a Design with X (tonnes per group), y and supporting arrays for the cohort.
 def build(element: str) -> Design:
     H = cfg("mill")["heel_t"]
     ht = heat_table()
@@ -45,6 +51,9 @@ def build(element: str) -> Design:
     return Design(element, d, X, y, d.B.to_numpy(), d.c_prev.to_numpy(), d.prev_measured.to_numpy(), float(d.W.sum() / d.total_charge_t.sum()))
 
 
+# Predicts the final wt% of an element for selected heats.
+# Combines heel contribution and charged group contents, divided by bath mass.
+# Returns an array of predicted concentrations.
 def predict(d: Design, e: np.ndarray, idx=slice(None)) -> np.ndarray:
     """Predicted final wt % for heats idx given group contents e."""
     H = cfg("mill")["heel_t"]

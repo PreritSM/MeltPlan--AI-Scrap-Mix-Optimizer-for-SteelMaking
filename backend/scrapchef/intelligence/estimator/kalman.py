@@ -5,6 +5,9 @@ import numpy as np
 
 
 class ElementKF:
+    # Initialises the per-element Kalman filter from the batch estimates.
+    # Floors the starting variance and random-walk noise so the filter does not freeze.
+    # Stores the state, covariance P, observation noise R and process noise Q.
     def __init__(self, mean, cov, sigma_eps, q_frac: float = 2e-3):
         self.batch = np.array(mean, float)
         self.sd_batch = np.sqrt(np.diag(cov))
@@ -16,6 +19,9 @@ class ElementKF:
         self.R = sigma_eps ** 2
         self.Q = q_frac * np.diag(sd_eff ** 2)
 
+    # Runs one predict/update step of the filter for a newly measured heat.
+    # Updates the group contents (clipped at zero) and the covariance from the innovation.
+    # Returns the normalised prediction error (z-score) for surprise tracking.
     def update(self, x: np.ndarray, y: float) -> float:
         """x: tonnes per group, y: c*B - H*c_prev (wt% t). Returns the normalised prediction error (z-score)."""
         self.P = self.P + self.Q
@@ -26,6 +32,9 @@ class ElementKF:
         self.P = self.P - np.outer(K, x @ self.P)
         return prediction_error / np.sqrt(S)
 
+    # Checks which groups have drifted from the batch estimate.
+    # A group drifts when its online estimate is more than k effective SDs away.
+    # Returns the indices of the drifting groups.
     def drift(self, k: float = 2.0) -> list[int]:
         """Groups whose online estimate left the batch estimate by > k sd_eff (sd floored: bootstrap sd is optimistic)."""
         sd_eff = np.maximum(self.sd_batch, np.maximum(0.15 * np.abs(self.batch), 0.005))

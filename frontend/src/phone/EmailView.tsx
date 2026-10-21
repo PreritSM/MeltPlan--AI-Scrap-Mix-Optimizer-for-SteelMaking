@@ -2,6 +2,9 @@ import { useState } from "react";
 import { useSim } from "../store/sim";
 import { ChatThread } from "../components/Agent";
 
+// Phone screen for the email role: inbox and message view.
+// Opening a mail marks emails read and shows its full body.
+// Offers a jump to the supervisor app and a reply thread to the agent.
 export default function EmailView() {
   const { phone, act, setOpenRole } = useSim();
   const [open, setOpen] = useState<number | null>(null);

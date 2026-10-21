@@ -6,6 +6,9 @@ import PhonePane from "./phone/PhonePane";
 
 const MIN_PHONE_PX = 300;
 
+// Root component: the resizable split between Process View and phone pane.
+// Starts the store's data loading and event subscription on mount.
+// Keeps the phone pane at least 300 px wide as the window resizes.
 export default function App() {
   const init = useSim((s) => s.init);
   const err = useSim((s) => s.error);
@@ -17,6 +20,9 @@ export default function App() {
   const [w, setW] = useState(window.innerWidth);
   useEffect(() => { const f = () => setW(window.innerWidth); window.addEventListener("resize", f); return () => window.removeEventListener("resize", f); }, []);
   const phoneMin = Math.min(50, Math.max(15, (MIN_PHONE_PX / w) * 100));
+  // Enforces the phone pane's minimum size.
+  // Resizes the pane up if it is narrower than the current minimum.
+  // Runs whenever the minimum changes.
   const guard = () => { if ((phone.current?.getSize() ?? 100) < phoneMin) phone.current?.resize(phoneMin); };
   useEffect(guard, [phoneMin]);
 

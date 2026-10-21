@@ -2,6 +2,9 @@ import { useState } from "react";
 import { useSim } from "../store/sim";
 import { AgentMessages, IssueBox } from "../components/Agent";
 
+// Phone screen for the crane operator: basket-by-basket loading lists.
+// Lets them confirm grabs and complete baskets for the selected heat.
+// Blocks loading while a newer plan awaits approval or release.
 export default function CraneView() {
   const { phone, act } = useSim();
   const v = phone.crane; const plan = v?.plan;
@@ -19,6 +22,9 @@ export default function CraneView() {
   const complete = (open.baskets_complete ?? []).includes(bas.basket_no);
   const held = !!plan.hold || !!open.pending;   // a version awaits approval (crane stops), or this heat's new list is not released yet
   const waiting = plan.loading.filter((h: any) => h.progress === "loaded");
+  // Marks the current basket complete on the server.
+  // Moves to the next basket, or back to the default heat after the last one.
+  // Unconfirmed lines are recorded at planned tonnes by the backend.
   const finish = async () => {
     await act("/api/crane/basket_complete", { slot: open.slot, basket: bas.basket_no });
     if (last) { setSlot(null); setTab(1); } else setTab(bas.basket_no + 1);

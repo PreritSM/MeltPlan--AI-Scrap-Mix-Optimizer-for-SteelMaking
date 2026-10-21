@@ -13,6 +13,9 @@ P_TOL = 1e-3   # the chance constraint binds by design (p = alpha); rounding mus
 Z_FLOOR = 0.5
 
 
+# Computes the implicit risk level (z) that a given mix runs at per element.
+# It is the z where the mix just meets the element limit, floored at Z_FLOOR.
+# Returns a dict of z values keyed by element.
 def z_hist(ctx: Context, x: np.ndarray, T: float, heel: dict[str, float]) -> dict[str, float]:
     """Per element, the z at which mix x just meets the limit (floored): the risk level the historical mix implicitly runs at."""
     B = T + ctx.heel_t
@@ -24,6 +27,9 @@ def z_hist(ctx: Context, x: np.ndarray, T: float, heel: dict[str, float]) -> dic
     return z
 
 
+# Compares the historical mean mix to the optimiser at the same predicted risk.
+# Scales the mix to each tap, matches its z per element and re-solves each heat.
+# Returns per-tonne historical vs matched costs and exceedance probabilities, or None.
 def risk_matched_baseline(ctx: Context, x_mean: np.ndarray, taps: list[float], heel: dict[str, float]) -> dict | None:
     """Historical mean mix vs the optimiser at that mix's own predicted risk, per tonne of steel (same prices, taps, heel).
 
@@ -54,6 +60,9 @@ def risk_matched_baseline(ctx: Context, x_mean: np.ndarray, taps: list[float], h
     return dict(hist_per_t=hist / steel, matched_per_t=matched / steel, p_exceed=p_exceed, worst_el=worst, worst_p=p_exceed[worst])
 
 
+# Re-evaluates a hand-edited mix instantly without solving.
+# Computes predicted chemistry, actual tap and cost per tonne for the mix.
+# Also lists chemistry limit violations and process (capacity / tap) violations.
 def evaluate_mix(ctx: Context, group_t: dict[str, float], tap_t: float, heel_c: dict[str, float], alpha: float = 0.05,
                  tap_tol_t: float | None = None, capacity_t: float | None = None) -> dict:
     """Chemistry and cost per tonne use the tap this mix actually makes; tap_t (the target) is only reported for comparison.
@@ -70,6 +79,9 @@ def evaluate_mix(ctx: Context, group_t: dict[str, float], tap_t: float, heel_c: 
                 process_violations=_process_violations(float(x.sum()), tap_actual, tap_t, tap_tol_t, capacity_t))
 
 
+# Checks a charge against furnace and tap constraints.
+# Flags charges above capacity and taps off target by more than the tolerance.
+# Returns a list of human-readable violation messages.
 def _process_violations(charge: float, tap: float, target: float, tol: float | None, cap: float | None) -> list[str]:
     out = []
     if cap is not None and charge > cap:

@@ -1,6 +1,9 @@
 import { useSim } from "../store/sim";
 import { AgentMessages, ChatThread, IssueBox } from "../components/Agent";
 
+// Phone screen for the shift leader.
+// Shows drift alerts, what changed, heat timeline with Cu results and the change log.
+// Lets them release an approved plan, report issues and ask the agent.
 export default function ShiftLeaderView() {
   const { phone, act } = useSim();
   const v = phone.shift_leader; const plan = v?.plan;

@@ -18,6 +18,9 @@ from pathlib import Path
 ENV_FILE = Path(__file__).resolve().parents[3] / ".env"   # backend/.env
 
 
+# Loads KEY=VALUE pairs from backend/.env into the environment.
+# Skips blanks and comments, strips quotes and an optional 'export ' prefix.
+# Existing environment variables are never overwritten.
 def _load_env_file(path: Path = ENV_FILE) -> None:
     """Minimal KEY=VALUE loader; real environment variables win."""
     if not path.exists():
@@ -46,6 +49,9 @@ class Reply:
 
 
 class LLM:
+    # Configures the LLM client from environment variables and .env.
+    # Reads base URL, model, API key, extra request body and the disable switch.
+    # The underlying OpenAI client is created lazily on first use.
     def __init__(self):
         _load_env_file()
         self.base_url = os.environ.get("SCRAPCHEF_LLM_BASE_URL", "https://integrate.api.nvidia.com/v1")
@@ -55,13 +61,22 @@ class LLM:
         self.disabled = os.environ.get("SCRAPCHEF_LLM", "").lower() == "off"
         self._client = None
 
+    # Reports whether the LLM can be used.
+    # True only when an API key is set and the LLM is not disabled.
+    # Callers fall back to deterministic templates when this is False.
     @property
     def available(self) -> bool:
         return bool(self.api_key) and not self.disabled
 
+    # Returns a short human-readable description of the LLM setup.
+    # Shows model and base URL when available.
+    # Otherwise states that the deterministic fallback is in use.
     def describe(self) -> str:
         return f"{self.model} @ {self.base_url}" if self.available else "LLM unavailable (no key or disabled): deterministic fallback"
 
+    # Sends one chat completion request, optionally with tools.
+    # Rebuilds the client once if a pooled connection went stale.
+    # Returns a normalised Reply with content, reasoning and tool calls.
     def chat(self, messages: list[dict], tools: list[dict] | None = None, timeout: float = 30.0,
              temperature: float = 0.2, max_tokens: int = 4096) -> Reply:
         """One chat completion. Raises openai errors (the caller falls back); never returns partial tool calls silently."""

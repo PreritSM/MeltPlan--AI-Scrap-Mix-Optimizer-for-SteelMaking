@@ -74,6 +74,9 @@ class HeatPlan(BaseModel):
     predicted: dict[str, ElementPrediction]
     cost: CostBreakdown
 
+    # Gives the tonnes of steel this heat is expected to tap.
+    # Uses the charge's computed tap when known, else falls back to the target tap.
+    # Older plans saved without tap_t therefore still report a sensible value.
     @property
     def steel_t(self) -> float:
         """Steel this heat makes: the charge's tap when known (plans saved before D19 fall back to the target)."""

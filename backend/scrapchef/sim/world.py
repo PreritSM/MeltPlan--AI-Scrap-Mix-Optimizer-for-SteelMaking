@@ -35,6 +35,9 @@ log = logging.getLogger(__name__)
 ISO = "%Y-%m-%dT%H:%M:%S"
 
 
+# Makes a shallow copy of an optimiser context with some fields replaced.
+# Each keyword argument overrides the attribute of the same name.
+# The original context is left unchanged.
 def _with(ctx, **kw):
     c = copy.copy(ctx)
     for k, v in kw.items():
@@ -43,6 +46,9 @@ def _with(ctx, **kw):
 
 
 class World:
+    # Creates the simulation world shared by both UI panes.
+    # Sets up the lock, LLM client, agent executor and persistence settings.
+    # Calls reset() to build the initial replay and planning state.
     def __init__(self, mode: str = "SHADOW_REPLAY", agent_async: bool = False, llm: LLM | None = None,
                  store_path: str | Path | None = None):
         self.lock = threading.RLock()
@@ -56,6 +62,9 @@ class World:
         self.reset(mode)
 
     # ------------------------------------------------------------ setup
+    # Resets the world to a fresh start for the given mode.
+    # Rebuilds the plan store, replay heats, Kalman filters, start clock and all planning state.
+    # In SIMULATED mode, applies the scripted copper drift to the chosen group.
     def reset(self, mode: str | None = None, drift_factor: float = 1.5, seed: int = 7, drift_group: str = "SCRAP_3A"):
         with self.lock:
             self.mode = mode or getattr(self, "mode", "SHADOW_REPLAY")
@@ -115,12 +124,21 @@ class World:
             self._emit("reset", {"mode": self.mode}, ["process", "email", "supervisor", "shift_leader", "crane"])
 
     # ------------------------------------------------------------ helpers
+    # Returns the simulation clock as an ISO timestamp string.
+    # Used for every audit row, event and message.
+    # Format is YYYY-MM-DDTHH:MM:SS.
     def _ts(self) -> str:
         return self.clock.strftime(ISO)
 
+    # Emits an event to the store at the current simulation time.
+    # audience lists which UI panes / roles should receive it.
+    # Returns the stored event.
     def _emit(self, kind: str, payload: dict, audience: list[str]):
         return self.store.emit(self._ts(), kind, payload, audience)
 
+    # Returns the live version of today's plan.
+    # Ignores superseded, rejected and dropped versions.
+    # Logs once if the plan has vanished from the store.
     def current_plan(self) -> PlanVersion | None:
         if not self.plan_id:
             return None
@@ -131,6 +149,9 @@ class World:
         vs = [p for p in mine if p.status not in ("SUPERSEDED", "REJECTED", "DROPPED")]
         return vs[-1] if vs else None
 
+    # Collects the actual heats of the last 30 days for baseline costing.
+    # Falls back to the last 500 heats if the window is empty.
+    # Returns charge tonnes and taps for heats tapping more than 80 t.
     def _baseline_heats(self):
         ht = heat_table()
         ht = ht[(ht.start_ts < self.clock) & (ht.start_ts >= self.clock - timedelta(days=30))]
@@ -140,11 +161,17 @@ class World:
         T = X @ self.ctx.yields
         return X[T > 80], T[T > 80]
 
+    # Computes the cost per tonne of the last 30 days' actual mix.
+    # Uses the assumed prices plus energy cost.
+    # Not risk-matched; see risk_match for the fair comparison.
     def baseline_per_t(self) -> float:
         """Cost per tonne of steel of the last 30 days' actual mix at the assumed prices. Not risk-matched, see risk_match()."""
         X, T = self._baseline_heats()
         return float((((self.ctx.prices + self.ctx.energy_k) @ X.T).sum()) / T.sum())
 
+    # Compares the historical mix with the optimiser at the same predicted risk.
+    # Also adds the plan's own breach probability on the worst element.
+    # Results are cached per plan version and heat set.
     def risk_match(self, plan: PlanVersion) -> dict | None:
         """Historical mix vs optimiser at the historical mix's own predicted risk (cached per plan version).
         plan_worst_p: the plan's own risk on the same element, averaged over heats the same way as worst_p."""
@@ -157,10 +184,16 @@ class World:
             self.rm_cache[key] = rm
         return self.rm_cache[key]
 
+    # Copies the Kalman filters' online estimates into the optimiser context.
+    # Called before any solve or evaluation.
+    # Keeps planning in step with the latest lab results.
     def _set_estimates(self):
         for el in ELS:
             self.ctx.est.mu[el] = self.kf[el].e.copy()
 
+    # Builds the MOCK yard stock per group for the planning horizon.
+    # Uses 1.3x the recipe upper bound of horizon charge, at least 1.15x observed usage.
+    # Stock only binds once a shortage is reported.
     def _inventory(self, idx: list[int]) -> np.ndarray:
         """MOCK yard stock per group: 1.3 x (recipe upper-bound share x horizon charge), at least 1.15 x observed usage.
         Stock only binds when a shortage is reported (the real feed will replace this)."""
@@ -172,6 +205,9 @@ class World:
         return np.array([i.tonnes for i in inv])
 
     # ------------------------------------------------------------ planning (06:00 cycle)
+    # Runs the daily 06:00 planning cycle for the next horizon.
+    # Resets settings to defaults, supersedes older versions and solves a new plan.
+    # Saves and emails the plan, records the decision and emits plan_created.
     def make_plan(self, trigger: str = "daily 06:00"):
         with self.lock:
             t0, t1 = self.clock, self.clock + timedelta(hours=self.mill["plan_horizon_h"])
@@ -213,15 +249,24 @@ class World:
             self._emit("plan_created", {"plan_id": plan.plan_id, "version": version}, ["process", "email", "supervisor"])
             return plan
 
+    # Returns the part of a plan that still matters.
+    # Drops tapped heats so views, emails and costs cover only heats still to make.
+    # Returns the whole plan once every heat is tapped.
     def _remaining(self, plan: PlanVersion) -> PlanVersion:
         """The plan as it still matters: tapped heats are history, so views, emails and costs cover only the heats still to make
         (the whole plan once every heat is tapped)."""
         left = [h for h in plan.heats if self.progress.get(h.slot) != "tapped"]
         return plan.model_copy(update=dict(heats=left)) if left and len(left) < len(plan.heats) else plan
 
+    # Lists the slots of a plan's heats that are already tapped.
+    # Based on the world's progress map.
+    # Returns a list of slot numbers.
     def _tapped(self, plan: PlanVersion) -> list[int]:
         return [h.slot for h in plan.heats if self.progress.get(h.slot) == "tapped"]
 
+    # Renders and 'sends' the plan email for the remaining heats.
+    # Moves the plan to EMAILED and stores the mail as unread.
+    # Emits an email event to the process and email panes.
     def _send_email(self, plan: PlanVersion, rationale: str):
         left = self._remaining(plan)
         mail = email_mod.render(left, self.clock.strftime("%Y-%m-%d"), self.baseline_per_t(), rationale, self.risk_match(left),
@@ -232,6 +277,9 @@ class World:
         self._emit("email", {"subject": mail["subject"], "version": plan.version}, ["process", "email"])
 
     # ------------------------------------------------------------ stepping the replay / scenario
+    # Advances the simulation by one heat.
+    # In replay mode, reveals the next real held-out heat's lab results.
+    # In SIMULATED mode, delegates to _step_sim.
     def step_heat(self) -> dict | None:
         with self.lock:
             plan = self.current_plan()
@@ -248,6 +296,9 @@ class World:
             self._after_heat(res)
             return res
 
+    # Simulates the next heat from the released plan's mix.
+    # Generates lab results from the true (drifted) group contents plus noise.
+    # Advances the clock an hour and processes the result.
     def _step_sim(self, plan: PlanVersion | None):
         if plan is None:
             return None
@@ -268,6 +319,9 @@ class World:
         self._after_heat(res)
         return res
 
+    # Processes a heat's lab results against the predictions.
+    # Updates the Kalman filters, surprise triggers, limit checks and heel chemistry.
+    # Logs the heat, marks its slot tapped and returns the record.
     def _reveal(self, x, meas, B, heatid, actual_tap) -> dict:
         slot = self.sim_step + 1 if self.mode == "SIMULATED" else (self.cursor - self.plan_heat0 + 1 if self.plan_id else 0)
         H = self.mill["heel_t"]
@@ -301,11 +355,17 @@ class World:
             self.progress[slot] = "tapped"
         return rec
 
+    # Checks whether every heat of the live plan is tapped.
+    # When true, the next step belongs to the next 06:00 plan.
+    # Returns False when there is no live plan.
     def plan_finished(self) -> bool:
         """Every heat of the live plan is tapped: the next step belongs to the next 06:00 plan."""
         p = self.current_plan()
         return bool(p) and all(self.progress.get(h.slot) == "tapped" for h in p.heats)
 
+    # Handles follow-up after a heat is tapped.
+    # Emits events, closes a finished plan and raises drift alerts.
+    # Wakes the agent on lab surprises or drift while open heats remain.
     def _after_heat(self, rec: dict):
         self._emit("heat_tapped", {"heatid": rec["heatid"], "slot": rec["slot"], "elements": rec["elements"]}, ["process", "supervisor", "shift_leader"])
         p = self.current_plan()
@@ -321,6 +381,9 @@ class World:
             self.dispatch("lab_surprise" if rec["triggers"] else "drift", why + ".")
 
     # ------------------------------------------------------------ planning services (called by the agent's tools and its fallback)
+    # Returns the plan a re-plan should start from.
+    # That is the live version, or the latest one if it was just rejected.
+    # Returns None once the plan has been dropped.
     def base_plan(self) -> PlanVersion | None:
         """The plan a re-plan starts from: the live version, or the latest one if it was just rejected (None once dropped)."""
         p = self.current_plan()
@@ -329,6 +392,9 @@ class World:
             p = vs[-1] if vs and vs[-1].status != "DROPPED" else None
         return p
 
+    # Splits a plan into heats to re-solve and heats to keep.
+    # Solving starts after the last tapped heat; loading, loaded or frozen heats keep their mix.
+    # Returns (start index, frozen mixes by relative index).
     def _split(self, plan: PlanVersion) -> tuple[int, dict[int, np.ndarray]]:
         """(start, frozen): solve from the first heat after the last tapped one; loading / loaded / user-frozen heats keep their mix."""
         tapped = [i for i, h in enumerate(plan.heats) if self.progress.get(h.slot) == "tapped"]
@@ -337,10 +403,16 @@ class World:
                   if self.progress.get(h.slot) in ("loading", "loaded") or h.frozen}
         return start, frozen
 
+    # Gives the heel chemistry for the first heat to solve.
+    # Uses the last measured chemistry once a heat of this plan is tapped.
+    # Otherwise uses the plan's starting heel.
     def _heel_start(self, plan: PlanVersion) -> dict[str, float]:
         """Heel for the first heat to solve: the last measured chemistry once a heat of this plan is tapped, else the plan's start."""
         return dict(self.heel) if any(self.progress.get(h.slot) == "tapped" for h in plan.heats) else dict(self.plan_heel0)
 
+    # Re-evaluates the plan's untapped heats under current estimates.
+    # Chains the heel through the heats and skips frozen ones in the totals.
+    # Returns open slots, cost per tonne and worst exceedance per element.
     def open_eval(self, plan: PlanVersion | None = None) -> dict | None:
         """The live plan's not-yet-tapped heats re-evaluated under current estimates: cost per t and worst P(exceed) per element."""
         plan = plan or self.base_plan()
@@ -363,6 +435,9 @@ class World:
         return dict(open_slots=[h.slot for j, h in enumerate(sub) if j not in frozen],
                     cost_per_t=round(cost / steel, 2) if steel else None, worst_p_exceed={el: round(v, 3) for el, v in risk.items()})
 
+    # Runs the optimiser for the open heats with agent-chosen settings.
+    # Applies caps, exclusions, spec, alpha and relaxed bounds, and summarises cost, moves and risk.
+    # Stores the candidate (feasible or not) without publishing anything.
     def solve_candidate(self, params: dict | None = None) -> tuple[PlanVersion | None, dict]:
         """Run the optimiser for the open heats with agent-chosen settings. Stores the candidate; publishes nothing.
         params: exclude_groups, group_caps_t, alpha, spec_class, relax_recipe_bounds."""
@@ -439,6 +514,9 @@ class World:
                                         base_version=plan.version, spec_class=spec, alpha=alpha, bounds=dict(c.bounds))
             return full, summary
 
+    # Applies the anti-churn rule to a candidate.
+    # Refuses a re-plan saving less than the threshold while the live plan is within risk.
+    # Returns the refusal reason, or None if the re-plan is allowed.
     def churn_blocks(self, summary: dict) -> str | None:
         """Anti-churn (A13): refuse a re-plan that saves less than the threshold while the live plan is still within risk."""
         cur = self.open_eval() or {}
@@ -450,6 +528,9 @@ class World:
                     "and the live plan is within its risk limit. Do not re-plan.")
         return None
 
+    # Saves a candidate as the next plan version and emails it for approval.
+    # Rejects stale candidates, supersedes the old version and adopts the candidate's settings.
+    # Records alternatives, sets the crane banner and emits a replan event.
     def publish_candidate(self, cid: str, rationale: dict, trigger_text: str, alternatives: list[str] | None = None,
                           actor: str = "agent", sibling: bool = False) -> PlanVersion:
         """Save a candidate as the next plan version and email it to the supervisor (approval stays human).
@@ -489,6 +570,9 @@ class World:
                        ["process", "email", "supervisor", "shift_leader", "crane"])
             return new
 
+    # Withdraws the plan when no feasible mix exists.
+    # Notifies the supervisor and shift leader and stops the crane from loading.
+    # After a rejection with an earlier approved version, reinstates that version instead.
     def drop_plan(self, reason: str, actor: str = "agent") -> PlanVersion | None:
         """No feasible plan: tell the supervisor why, then withdraw the plan completely. There is no live version afterwards,
         the crane has no list to load and the agent stops re-planning; the next plan comes from the 06:00 cycle.
@@ -510,15 +594,24 @@ class World:
             self._emit("plan_dropped", {"version": p.version, "reason": reason}, ["process", "email", "supervisor", "shift_leader", "crane"])
             return p
 
+    # Captures the current planning settings.
+    # Includes availability caps, spec class, alpha and live recipe bounds.
+    # Stored per version so they can be restored later.
     def _settings(self) -> dict:
         return dict(caps=dict(self.caps), spec_class=self.spec_class, alpha=self.alpha, live_bounds=self.live_bounds)
 
+    # Finds the newest approved version before a given version.
+    # Looks for approved, released or loading actions in the audit log.
+    # Returns the version number, or None.
     def _last_approved(self, before: int) -> int | None:
         """The newest version of the day before `before` that the supervisor approved (it may have been released since)."""
         vs = [a["version"] for a in self.store.audit(self.plan_id)
               if a["action"] in ("SUPERVISOR_APPROVED", "RELEASED", "LOADING") and a["version"] < before]
         return max(vs) if vs else None
 
+    # Puts a previously approved version back live after a rejection.
+    # Saves it as a new version with its original settings, re-released if it was the crane's list.
+    # Updates explanations, notifies the crane and emits plan_reinstated.
     def _reinstate(self, rejected: PlanVersion, prev: int, reason: str):
         """Rejecting a change keeps the plan the supervisor had approved: approved version `prev` comes back as a new version
         (stored versions are never rewritten), with the settings it was made under, released again if it was the crane's list."""
@@ -545,11 +638,17 @@ class World:
         self._emit("plan_reinstated", {"version": new.version, "from": prev, "rejected": rejected.version},
                    ["process", "email", "supervisor", "shift_leader", "crane"])
 
+    # Sends a message to a role's phone.
+    # Appends it to the role's message list with time and sender.
+    # Emits a message event to the process pane and that role.
     def notify(self, role: str, text: str, sender: str = "agent"):
         with self.lock:
             self.messages.setdefault(role, []).append(dict(ts=self._ts(), sender=sender, text=text))
             self._emit("message", {"role": role, "text": text, "sender": sender}, ["process", role])
 
+    # Marks the given roles' agent messages as expired.
+    # They stay in the log but disappear from the phone screens.
+    # why records the reason they went out of date.
     def _expire_messages(self, roles, why: str):
         """Agent notes are about a pending situation ('hold loading until the new list arrives'); once a plan is released or a new
         day starts they are out of date. They stay in the log (Process View) but leave the phone screens."""
@@ -558,12 +657,18 @@ class World:
                 if not m.get("expired"):
                     m["expired"] = why
 
+    # Adds a message to the chat thread for a role.
+    # who records whether the agent or the role wrote it.
+    # Emits a chat event to the process pane and that role.
     def post_chat(self, role: str, text: str, who: str = "agent"):
         with self.lock:
             self.chat.append(dict(who=who, to=role, text=text, ts=self._ts()))
             self._emit("chat", {"role": role, "who": who, "text": text}, ["process", role])
 
     # ------------------------------------------------------------ agent dispatch (LLM loop with deterministic fallback)
+    # Wakes the agent with an event.
+    # Runs asynchronously in the API and synchronously in tests.
+    # Lab / drift events are dropped while a run is already pending.
     def dispatch(self, kind: str, text: str, role: str | None = None):
         """Wake the agent. Async in the API (UI stays responsive); sync in tests. Lab/drift events coalesce while a run is pending."""
         ev = dict(kind=kind, text=text, role=role, ts=self._ts())
@@ -579,6 +684,9 @@ class World:
         self.agent_pending += 1
         return self._run_agent(ev)
 
+    # Runs the agent loop for one event, safely.
+    # Any crash is recorded as an error decision instead of propagating.
+    # Always decrements the pending count and emits agent_done.
     def _run_agent(self, ev: dict):
         try:
             rec = agent_loop.handle(self, ev, self.llm)
@@ -593,6 +701,9 @@ class World:
         return rec
 
     # ------------------------------------------------------------ user actions
+    # Supervisor approval of the live plan or one of the agent's alternatives.
+    # An alternative is first published as a new version, then approved.
+    # Emits an approved event.
     def approve(self, actor="supervisor", option: str | None = None):
         """Approve the live version, or one of the agent's costed alternatives (published as a new version, then approved)."""
         with self.lock:
@@ -607,6 +718,9 @@ class World:
             self.store.transition(p, "SUPERVISOR_APPROVED", actor, self._ts(), "approved" + (f" option {option}" if option else ""))
             self._emit("approved", {"version": p.version}, ["process", "supervisor", "shift_leader"])
 
+    # Supervisor rejection of the live plan.
+    # Marks it REJECTED (it stays on record) and emits a rejected event.
+    # Dispatches the reason to the agent to re-plan.
     def reject(self, reason: str):
         """The agent re-plans with the supervisor's reason (the rejected version stays on record)."""
         with self.lock:
@@ -615,17 +729,26 @@ class World:
             self._emit("rejected", {"version": p.version, "reason": reason}, ["process", "supervisor"])
         return self.dispatch("rejection", reason, "supervisor")
 
+    # Reports a free-text operational issue from a role.
+    # Emits an issue event for the process, supervisor and shift leader panes.
+    # Dispatches the issue to the agent to interpret.
     def report_issue(self, role: str, text: str):
         """Free-text operational issue ("only 40 t of 3A left", "basket 2 out of service"): the agent interprets it."""
         with self.lock:
             self._emit("issue", {"role": role, "text": text}, ["process", "supervisor", "shift_leader"])
         return self.dispatch("issue", text, role)
 
+    # Handles a question from a role.
+    # Posts the question to that role's chat thread.
+    # Dispatches it to the agent, which answers from tool results only.
     def ask(self, role: str, text: str):
         """A question from a role (chat or email reply): the agent answers from tool results only."""
         self.post_chat(role, text, who=role)
         return self.dispatch("question", text, role)
 
+    # Releases the current plan to the cranes.
+    # Moves it to RELEASED, records the released version and clears the banner.
+    # Expires stale crane messages and emits a released event.
     def release(self, actor="shift_leader"):
         with self.lock:
             p = self.current_plan()
@@ -636,6 +759,9 @@ class World:
             self._emit("released", {"version": p.version}, ["process", "shift_leader", "crane"])
 
     # ------------------------------------------------------------ Control Suite (hand edits)
+    # Gives the heel chemistry to use for a given heat slot.
+    # Measured result after the last tapped heat, the start heel for slot 1, or the previous heat's prediction.
+    # Returns a dict keyed by element.
     def _heel_for(self, plan: PlanVersion, slot: int) -> dict[str, float]:
         """Heel chemistry for heat `slot`: the measured result if heat slot-1 is the last tapped one, the plan's start heel for
         heat 1, else heat slot-1's predicted mean in `plan`."""
@@ -646,10 +772,16 @@ class World:
             return dict(self.plan_heel0)
         return {el: plan.heats[slot - 2].predicted[el].mean for el in ELS}
 
+    # Checks whether a heat can still be hand-edited.
+    # Tapped, loading, loaded or frozen heats are locked.
+    # Returns the reason it is locked, or None.
     def _edit_lock(self, h) -> str | None:
         st = "frozen" if h.frozen else self.progress.get(h.slot)
         return f"heat {h.slot} is {st}: it can no longer be edited" if st in ("tapped", "loading", "loaded", "frozen") else None
 
+    # Checks a hand-edited mix against recipe and availability rules.
+    # Recipe share bounds only warn; shortage caps and yard stock block.
+    # Returns (rule violations, availability violations).
     def _edit_checks(self, plan: PlanVersion, slot: int, group_t: dict[str, float]) -> tuple[list[str], list[str]]:
         """(rule_violations, availability_violations). Recipe share bounds only warn (deliberate departures are allowed);
         shortage caps and yard stock block. Caps cover the open, non-frozen heats and stock the whole day, as in solve_candidate."""
@@ -671,6 +803,9 @@ class World:
                   for i, g in enumerate(GROUPS) if day_t[i] > self.base_inventory[i] + 0.05]
         return rules, avail
 
+    # Re-predicts later untapped heats after an edit, without solving.
+    # Chains the heel from the edited heat through the unchanged mixes.
+    # Returns each heat's worst element risk, before and after, with a breach flag.
     def _downstream(self, plan: PlanVersion, slot: int, pred: dict) -> list[dict]:
         """Later untapped heats re-predicted from their unchanged mixes with the chained heel (no solve)."""
         out, heel = [], {el: pred[el]["mean"] for el in ELS}
@@ -684,6 +819,9 @@ class World:
             heel = {e: pr[e]["mean"] for e in ELS}
         return out
 
+    # Saves a hand-edited mix for one heat as a new plan version.
+    # Blocks locked heats, over-capacity charges and availability breaches.
+    # Re-predicts later heats, drops stale duals and marks the new version EMAILED.
     def edit(self, slot: int, group_t: dict[str, float], actor="supervisor") -> PlanVersion:
         with self.lock:
             p = self.current_plan()
@@ -715,6 +853,9 @@ class World:
             self._emit("edited", {"version": new.version, "slot": slot}, ["process", "supervisor", "shift_leader"])
             return new
 
+    # Evaluates a proposed hand edit for one heat without saving it.
+    # Reports chemistry, cost delta, rule / availability violations and lock status.
+    # Also shows the knock-on effect on later heats.
     def evaluate(self, slot: int, group_t: dict[str, float]) -> dict:
         with self.lock:
             p = self.current_plan()
@@ -728,6 +869,9 @@ class World:
             ev["downstream"] = self._downstream(p, slot, ev["predicted"])
             return ev
 
+    # Finds a newer version than the released one and what it changes.
+    # Lists heats whose mix differs and have not started loading.
+    # The crane sees those lists but cannot load them until release.
     def pending_change(self) -> tuple[PlanVersion | None, set[int]]:
         """A newer version than the released one (awaiting approval or release) and the heats whose mix it changes. The crane
         sees those heats' new lists but may not load them until the new version is released."""
@@ -741,6 +885,9 @@ class World:
         return p, {h.slot for h in p.heats if h.slot in old and h.group_t != old[h.slot].group_t
                    and self.progress.get(h.slot) not in ("tapped", "loading", "loaded")}
 
+    # Explains why the crane may not move at all, if it may not.
+    # This happens while a newer version awaits approval or is being re-planned after a rejection.
+    # Returns the hold message, or None.
     def crane_hold(self) -> str | None:
         """Why the crane may not move at all: a newer version than the released one is not approved yet (awaiting the supervisor,
         or rejected and being re-planned). The crane resumes once the supervisor approves."""
@@ -755,6 +902,9 @@ class World:
             return f"Plan v{latest.version} was rejected and a new plan is being made: stop loading until one is approved."
         return None
 
+    # Explains why the furnace may not tap the next heat yet.
+    # Either the crane is on hold, or the next heat changes in an unreleased version.
+    # Returns the hold message, or None.
     def sim_hold(self) -> str | None:
         """Why the furnace may not tap the next heat yet: the crane may not load it (a newer version awaits approval), or the
         heat's mix changes in a version that is not released. The sim clock waits for the people, as it waits for the agent."""
@@ -768,6 +918,9 @@ class World:
                 return f"Heat {nxt} changes in v{p.version}, which is not released yet: release it to tap the heat."
             return None
 
+    # Ensures a heat may be loaded right now.
+    # Raises if the crane is on hold or the heat changes in an unreleased version.
+    # Used before recording grabs and basket completions.
     def _check_not_pending(self, slot: int):
         hold = self.crane_hold()
         if hold:
@@ -776,6 +929,9 @@ class World:
         if slot in changed:
             raise ValueError(f"heat {slot} changes in v{p.version}, which is not released yet: wait for the new list")
 
+    # Records a crane grab for a heat, basket and material code.
+    # Idempotent: a repeat returns the existing event and emits nothing.
+    # Moves the plan to LOADING and the heat to 'loading' on the first grab.
     def grab_done(self, slot: int, basket: int, mat_code: int, t: float):
         """Idempotent per (plan, slot, basket, code): a repeat returns the recorded event and emits nothing."""
         with self.lock:
@@ -793,6 +949,9 @@ class World:
             self._emit("grab_done", e.model_dump(), ["process", "shift_leader", "crane"])
             return e
 
+    # Marks a basket of a released heat as fully loaded.
+    # Records unconfirmed lines at planned tonnes so the log stays append-only.
+    # When all baskets are done, the heat becomes 'loaded'.
     def basket_complete(self, slot: int, basket: int) -> dict:
         """Every line of the basket is in: lines not yet confirmed are recorded at planned tonnes (the log stays append-only).
         All baskets complete -> the heat is "loaded" (frozen, waiting for the furnace; Step heat taps it)."""
@@ -824,10 +983,16 @@ class World:
                 self._emit("heat_loaded", dict(slot=slot), ["process", "supervisor", "shift_leader", "crane"])
             return state(n)
 
+    # Reports a grade group as unavailable.
+    # Wraps report_issue with a standard shift leader message.
+    # Returns the agent's result.
     def report_shortage(self, group: str):
         return self.report_issue("shift_leader", f"{group} unavailable.")
 
     # ------------------------------------------------------------ views
+    # Builds the phone screen data for one role.
+    # Projects the remaining plan for the role, adding crane lists, alternatives, alerts and logs as relevant.
+    # Includes the role's active messages, chat and agent busy flag.
     def phone(self, role: str) -> dict:
         with self.lock:
             p = self.current_plan() or (self.store.versions()[-1] if self.store.versions() else None)
@@ -870,6 +1035,9 @@ class World:
             return out
 
 
+# Loads a JSON artefact from the data directory.
+# Used for the back-test result shown to the supervisor.
+# Returns None if the file does not exist.
 def _load(name: str):
     import json
     from scrapchef.data.store import ROOT

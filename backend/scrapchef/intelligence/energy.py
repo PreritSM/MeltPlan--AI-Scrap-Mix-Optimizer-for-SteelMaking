@@ -12,6 +12,9 @@ from sklearn.metrics import mean_absolute_error, r2_score
 from scrapchef.data.store import GROUPS, ROOT, cfg, connect, heat_table
 
 
+# Loads the cohort heats joined with their energy consumption data.
+# Drops heats without MWh and filters out implausible values outside 10-120 MWh.
+# Returns the cleaned DataFrame used to fit the energy model.
 def frame():
     ht = heat_table()
     e = connect().execute("SELECT heatid, mwh_sum_mw AS mwh, o2_nm3, inj_c_t FROM heat_energy").df()
@@ -19,6 +22,9 @@ def frame():
     return d[(d.mwh > 10) & (d.mwh < 120)].reset_index(drop=True)
 
 
+# Fits and compares the energy models (total-charge only vs per-group).
+# Uses an 80/20 time split with Huber regression and picks group effects only if R2 lifts by >0.05.
+# Writes data/energy.json and the reports/energy.md summary.
 def main() -> None:
     d = frame()
     n = len(d); i = int(0.8 * n)

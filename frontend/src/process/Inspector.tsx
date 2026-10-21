@@ -1,6 +1,9 @@
 import { Badge, f } from "../components/Badge";
 import { sym } from "../format";
 
+// Renders an array of row objects as a simple table.
+// Columns default to the first row's keys; objects are shown as JSON.
+// Shows 'No rows.' when empty.
 const Table = ({ rows, cols }: { rows: any[]; cols?: string[] }) => {
   if (!rows?.length) return <div className="small">No rows.</div>;
   const c = cols ?? Object.keys(rows[0]);
@@ -9,9 +12,14 @@ const Table = ({ rows, cols }: { rows: any[]; cols?: string[] }) => {
       <tbody>{rows.map((r, i) => <tr key={i}>{c.map((k) => <td key={k}>{typeof r[k] === "object" ? JSON.stringify(r[k]) : f(r[k], 4)}</td>)}</tr>)}</tbody></table>
   );
 };
+// Renders any value as pretty-printed JSON.
+// Used as the inspector's fallback view.
+// Output is monospaced.
 const Json = ({ v }: { v: any }) => <div className="mono">{JSON.stringify(v, null, 1)}</div>;
 
-/** One agent run: event -> model reasoning/text and tool calls in order -> outcome. */
+// Shows one agent run in the decision trace.
+// Lists the trigger, model thinking / text and tool calls in order, then the outcome.
+// The badge shows whether the LLM, fallback or deterministic path ran.
 function AgentRun({ d }: { d: any }) {
   const path = d.path ?? "deterministic";
   const kind = path === "llm" ? "ESTIMATED" : path.startsWith("fallback") ? "ASSUMED" : "DERIVED";
@@ -39,6 +47,9 @@ function AgentRun({ d }: { d: any }) {
   );
 }
 
+// Drawer showing the detailed inspector content for a selected card.
+// Chooses a card-specific view (estimator, optimiser, agent, back-test, logs, ...).
+// Falls back to raw JSON for other cards.
 export default function Inspector({ card, onClose }: { card: any; onClose: () => void }) {
   const i = card.inspector ?? {};
   let body: any;

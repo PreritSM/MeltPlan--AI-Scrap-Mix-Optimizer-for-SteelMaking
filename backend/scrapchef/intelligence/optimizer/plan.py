@@ -12,6 +12,9 @@ from scrapchef.data.store import GROUPS, basket_profile, cfg, code_split
 from .model import Context, ELS, duals, predict_heat, solve, tap_of
 
 
+# Splits a heat's group tonnages into a basket-by-basket loading list.
+# Divides each group between two baskets by typical basket mass, then into real mill codes.
+# Returns Basket objects with grab order, tonnes and number of grabs per item.
 def _baskets(group_t: dict[str, float], grab_t: float, splits, profile) -> list[Basket]:
     """Split each group across baskets in proportion to basket target mass; groups to real codes by recent usage."""
     total = sum(group_t.values())
@@ -37,6 +40,9 @@ def _baskets(group_t: dict[str, float], grab_t: float, splits, profile) -> list[
     return out
 
 
+# Solves the optimiser and converts the result into a PlanVersion.
+# Builds each heat's baskets, chemistry predictions and costs, plus the binding constraints.
+# Returns None if the solve is infeasible.
 def build_plan(ctx: Context, taps: list[float], plan_id: str, version: int = 1, mode: str = "chance",
                alpha: float = 0.05, spec_class: str = "plant_strict", parent: int | None = None,
                created_by: str = "agent", frozen: dict | None = None, ts: str | None = None, slot0: int = 1) -> PlanVersion | None:
@@ -65,6 +71,9 @@ def build_plan(ctx: Context, taps: list[float], plan_id: str, version: int = 1, 
                        alpha=alpha, heats=heats, binding=binding)
 
 
+# Builds a HeatPlan from an explicitly given group mix (Control Suite edits).
+# Evaluates the mix's chemistry, tap and cost without running a solve.
+# Returns the HeatPlan with baskets and predictions filled in.
 def heat_from_groups(ctx: Context, slot: int, tap_t: float, group_t: dict[str, float], heel: dict, spec_class: str, frozen: bool = False) -> HeatPlan:
     """Build a HeatPlan from an explicit mix (Control Suite edits)."""
     from .evaluate import evaluate_mix

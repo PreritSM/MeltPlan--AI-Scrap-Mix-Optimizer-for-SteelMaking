@@ -80,6 +80,9 @@ SPECS: dict[str, tuple[type[BaseModel], str]] = {
 }
 
 
+# Builds the OpenAI-style tool definitions sent to the LLM.
+# Converts each pydantic argument model in SPECS into a JSON schema.
+# Returns a list of function-tool dicts with names and descriptions.
 def openai_tools() -> list[dict]:
     out = []
     for name, (model, desc) in SPECS.items():
@@ -94,6 +97,9 @@ class ToolError(Exception):
 
 
 class AgentTools:
+    # Creates the tool handler for one agent run on one event.
+    # Seeds the allowed-number set from the event and sets up outcome, trace and candidate tracking.
+    # Also tracks cost figures that must never reach no-cost roles.
     def __init__(self, world, event: dict):
         self.w, self.event = world, event
         self.seen: set[str] = fact_numbers(event)   # numbers the agent may repeat: the event text + every tool result
@@ -105,6 +111,9 @@ class AgentTools:
         self.cost_numbers: set[str] = set()         # numbers from cost/price fields: never in text for roles without cost access
 
     # ------------------------------------------------------------ dispatch
+    # Validates and runs one tool call, then records it in the trace.
+    # Errors are returned as {'error': ...} so the model can correct itself.
+    # Always returns a JSON-serialisable dict.
     def call(self, name: str, raw_args: str | dict) -> dict:
         """Validate and run one tool call. Always returns a JSON-able dict; {'error': ...} for anything the model should fix."""
         out = self._call(name, raw_args)
@@ -112,6 +121,9 @@ class AgentTools:
                                result=_brief(out), error=out.get("error")))
         return out
 
+    # Parses and validates tool arguments, then dispatches to the handler.
+    # Turns bad arguments, ToolErrors and crashes into error results.
+    # Adds numbers (and cost numbers) from the result to the allowed sets.
     def _call(self, name: str, raw_args: str | dict) -> dict:
         if name not in SPECS:
             return {"error": f"unknown tool {name}; available: {', '.join(SPECS)}"}
@@ -131,6 +143,9 @@ class AgentTools:
         return out
 
     # ------------------------------------------------------------ tools
+    # Tool: returns a snapshot of the planning situation for the LLM.
+    # Includes the live plan, open-heat risk and cost, estimates, limits, availability and recent heats.
+    # Returns a short note instead when there is no live plan.
     def get_state(self, _: GetState) -> dict:
         w = self.w
         plan = w.base_plan()
@@ -158,12 +173,18 @@ class AgentTools:
             vs_history=_vs_history(w, plan),
         )
 
+    # Tool: solves a candidate plan for the open heats with given settings.
+    # Remembers the candidate id so later tools can reference it.
+    # Publishes nothing; returns the candidate summary or infeasibility.
     def run_optimizer(self, a: RunOptimizer) -> dict:
         _, summary = self.w.solve_candidate(a.model_dump())
         if summary.get("candidate_id"):
             self.candidates.append(summary["candidate_id"])
         return summary
 
+    # Tool: evaluates a hand-specified mix for one heat.
+    # Reports tap, cost per tonne, delta vs plan and any violations.
+    # Also returns rounded chemistry predictions per element.
     def evaluate_mix(self, a: EvaluateMix) -> dict:
         ev = self.w.evaluate(a.slot, dict(a.group_t))
         return dict(slot=a.slot, tap_t=round(ev["tap_actual_t"], 1), cost_per_t=round(ev["cost"]["per_t"], 2),
@@ -171,6 +192,9 @@ class AgentTools:
                     predicted={el: dict(mean=round(p["mean"], 4), p95=round(p["p95"], 4), limit=p["limit"], p_exceed=round(p["p_exceed"], 3))
                                for el, p in ev["predicted"].items()})
 
+    # Tool: compares a candidate with the live plan heat by heat.
+    # Lists group tonnage changes of at least 0.1 t per heat.
+    # Raises a ToolError for unknown or infeasible candidates.
     def compare_plans(self, a: ComparePlans) -> dict:
         cand = self.w.candidates.get(a.candidate_id)
         if not cand or cand["plan"] is None:
@@ -183,6 +207,9 @@ class AgentTools:
                 rows.append(dict(slot=ho.slot, delta_t={g: v for g, v in d.items() if abs(v) >= 0.1}))
         return dict(candidate_id=a.candidate_id, live_version=live.version, changed_heats=rows, summary=cand["summary"])
 
+    # Tool: sends a candidate to the supervisor as a new plan version.
+    # Enforces anti-churn, prefers live spec/risk settings and checks all rationale text.
+    # Records the proposal outcome and returns the new version and alternatives.
     def propose_plan(self, a: ProposePlan) -> dict:
         if self.outcome.get("version"):
             raise ToolError("a plan was already proposed in this run")
@@ -208,12 +235,18 @@ class AgentTools:
         return dict(ok=True, version=new.version, status="EMAILED to supervisor for approval",
                     alternatives_offered=[x["candidate_id"] for x in self.w.alternatives.get((new.plan_id, new.version), [])])
 
+    # Tool: sends an information-only message to one role's phone.
+    # Checks the text for unsupported numbers and cost leaks for restricted roles.
+    # Records the message and confirms delivery.
     def send_message(self, a: SendMessage) -> dict:
         self._check_text(a.text, no_cost_text=a.text if a.role == "shift_leader" else "", crane_text=a.text if a.role == "crane" else "")
         self.w.notify(a.role, a.text)
         self.messages_sent.append(dict(role=a.role, text=a.text))
         return dict(ok=True, delivered_to=a.role)
 
+    # Tool: withdraws the plan when no feasible mix exists.
+    # Requires an infeasible optimiser run (unless withdrawing a rejected change).
+    # After a rejection, reinstates the last approved plan instead of dropping everything.
     def drop_plan(self, a: DropPlan) -> dict:
         if self.outcome.get("version"):
             raise ToolError("a plan was already proposed in this run; it cannot also be dropped")
@@ -235,9 +268,15 @@ class AgentTools:
         return dict(ok=True, dropped_version=p.version, status="DROPPED; supervisor informed, crane told not to load")
 
     # ------------------------------------------------------------ guards
+    # Checks whether a candidate keeps the live spec class and risk level.
+    # Its alpha must not be higher than the live alpha.
+    # Used to stop the agent loosening quality settings to save cost.
     def _keeps_live_settings(self, cand: dict) -> bool:
         return cand["spec_class"] == self.w.spec_class and cand["alpha"] <= self.w.alpha + 1e-9
 
+    # Guards outgoing text before it is sent.
+    # Rejects numbers not found in tool results, and any cost talk or figures for crane / shift leader.
+    # Raises a ToolError describing what to fix.
     def _check_text(self, text: str, no_cost_text: str = "", crane_text: str = "") -> None:
         """no_cost_text (shift leader): no currency and no cost figures, though it may say that costs go to the supervisor.
         crane_text: the same, and no talk of cost or price at all (crane texts are loading instructions)."""
@@ -255,6 +294,9 @@ class AgentTools:
                                 + "; remove them from the text for those roles")
 
 
+# Compares the plan with the last 30 days' actual mix, as the email shows it.
+# Reports plan, historical and same-risk optimum costs and breach probabilities.
+# Returns None if no risk-matched baseline is available.
 def _vs_history(w, plan) -> dict | None:
     """The plan against the last 30 days' actual mix, as the email shows it (all heats of the plan, same assumed prices)."""
     rm = w.risk_match(plan)
@@ -272,6 +314,9 @@ def _vs_history(w, plan) -> dict | None:
 COST_KEY = re.compile(r"cost|price|per_t|usd|saving", re.I)   # cost_per_t, delta_per_t, delta_breakdown.*_per_t, vs_history ...
 
 
+# Collects numbers stored under cost-like keys anywhere in a tool result.
+# Recurses through dicts and lists, also picking up '$' amounts inside strings.
+# Returns the set of cost figure forms that must not leak to restricted roles.
 def _cost_numbers(v, under_cost: bool = False) -> set[str]:
     """Numbers stored under cost-like keys anywhere in a tool result."""
     out: set[str] = set()
@@ -288,6 +333,9 @@ def _cost_numbers(v, under_cost: bool = False) -> set[str]:
     return out
 
 
+# Lists the ways a cost figure might be quoted in text.
+# Includes the raw value and 2 decimals; coarser roundings only for values >= 100.
+# Returns the set of normalised number strings.
 def _cost_forms(v: float) -> set[str]:
     """How a cost figure would be quoted: as given or to 2 decimals; shorter roundings only for prices (>= 100), so a
     tonnage such as 7.8 t is not mistaken for a rounded cost delta of 7.78."""
@@ -295,10 +343,16 @@ def _cost_forms(v: float) -> set[str]:
     return set().union(*(fact_numbers(f) for f in forms))
 
 
+# Extracts all numbers from a text in normalised form.
+# Delegates to fact_numbers.
+# Returns a set of number strings.
 def _numbers_in(text: str) -> set[str]:
     return fact_numbers(text)
 
 
+# Parses a JSON string if possible.
+# Falls back to the original value when parsing fails.
+# Used to show tool arguments in the trace.
 def _safe_json(s: str):
     try:
         return json.loads(s)
@@ -306,6 +360,9 @@ def _safe_json(s: str):
         return s
 
 
+# Builds a compact view of a tool result for the decision trace.
+# Keeps only key fields, or a plan summary for get_state results.
+# The model itself still receives the full result.
 def _brief(out: dict) -> dict:
     """Compact view of a tool result for the trace (the model still receives the full result)."""
     keep = ("error", "status", "candidate_id", "cost_per_t", "delta_per_t", "moves", "worst_p_exceed", "binding", "ok", "version",

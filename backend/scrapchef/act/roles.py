@@ -7,6 +7,9 @@ from scrapchef.intelligence.optimizer.evaluate import P_TOL
 ROLES = ("email", "supervisor", "shift_leader", "crane")
 
 
+# Builds the per-element headroom view for one heat.
+# status_only gives just OK / AT RISK; otherwise the full prediction is dumped.
+# Returns a dict keyed by element.
 def _headroom(h, status_only: bool):
     out = {}
     for el, p in h.predicted.items():
@@ -17,6 +20,9 @@ def _headroom(h, status_only: bool):
     return out
 
 
+# Projects a plan version into the view a given role is allowed to see.
+# Adds summaries, costs, binding constraints and basket lists depending on the role.
+# Guarantees the UI never receives fields (like prices) outside its role.
 def project(plan: PlanVersion, role: str, baseline_per_t: float | None = None, explanation: dict | None = None,
             progress: dict | None = None, risk_match: dict | None = None) -> dict:
     """Return the role's view of a plan version."""

@@ -55,6 +55,9 @@ How to handle each event:
 - question: answer in at most 3 sentences as your final message, using tool results only. Do not propose unless asked."""
 
 
+# Records the outcome of an agent run as a decision entry on the world.
+# Captures trigger, path taken, steps, tools used, facts, explanations and messages.
+# Emits an agent_decision event for no-change outcomes and returns the record.
 def _record(w, ev, path, tools, outcome: dict, steps: list[dict], reason: str = "") -> dict:
     rec = dict(ts=w._ts(), trigger=ev["kind"], trigger_text=ev["text"], role=ev.get("role"), path=path,
                decision=outcome.get("decision", "message"), version=outcome.get("version"),
@@ -69,6 +72,9 @@ def _record(w, ev, path, tools, outcome: dict, steps: list[dict], reason: str = 
     return rec
 
 
+# Entry point for every agent event.
+# Runs the LLM tool-use loop when available, else the deterministic fallback policy.
+# If the LLM fails before acting, falls back without acting twice.
 def handle(w, ev: dict, llm) -> dict:
     """Entry point for every agent event."""
     tools = AgentTools(w, ev)
@@ -90,6 +96,9 @@ def handle(w, ev: dict, llm) -> dict:
     return _record(w, ev, "fallback after LLM", tools, out, _merge(steps, tools.trace[:n]) + tools.trace[n:], reason=why)
 
 
+# Runs the LLM tool-use loop for one event under a call budget and deadline.
+# Feeds tool results back each turn and nudges once if a required action is missing.
+# Returns the decision outcome, or None if the run did not finish properly.
 def run_llm(w, ev: dict, tools: AgentTools, llm, steps: list[dict]) -> dict | None:
     state = tools.call("get_state", {})
     messages = [{"role": "system", "content": SYSTEM},
@@ -149,12 +158,18 @@ def run_llm(w, ev: dict, tools: AgentTools, llm, steps: list[dict]) -> dict | No
     return _outcome(w, ev, tools, final)
 
 
+# Checks whether a run that needed an action skipped proposing a plan.
+# True for issue / inbox / rejection runs with a feasible candidate but no proposal.
+# Used to nudge the LLM or trigger the fallback.
 def _missing_proposal(w, ev: dict, tools: AgentTools) -> bool:
     """An issue/inbox/rejection run that found a feasible candidate but proposed nothing: a message alone is not enough."""
     return (ev["kind"] in NEEDS_ACTION and not tools.outcome.get("version")
             and any((w.candidates.get(c) or {}).get("plan") is not None for c in tools.candidates))
 
 
+# Checks whether every optimiser run failed but the plan was left alone.
+# True for issue / inbox / rejection runs that neither proposed nor dropped.
+# Used to nudge the LLM or trigger the fallback.
 def _missing_drop(w, ev: dict, tools: AgentTools) -> bool:
     """An issue/inbox/rejection run where every optimiser run was infeasible, yet the plan was neither proposed nor dropped."""
     if ev["kind"] not in NEEDS_ACTION or tools.outcome.get("version") or tools.outcome.get("dropped") or w.base_plan() is None:
@@ -163,6 +178,9 @@ def _missing_drop(w, ev: dict, tools: AgentTools) -> bool:
     return bool(cands) and all(c.get("plan") is None for c in cands)
 
 
+# Checks whether a lab / drift run left an over-risk live plan untouched.
+# True when no feasible candidate was found and live risk exceeds alpha.
+# Used to nudge the LLM to explore relaxed settings.
 def _unsafe_and_unexplored(w, ev: dict, tools: AgentTools) -> bool:
     """A lab/drift run that leaves an over-risk live plan alone without finding any feasible candidate."""
     if ev["kind"] not in ("lab_surprise", "drift") or tools.outcome.get("version"):
@@ -173,6 +191,9 @@ def _unsafe_and_unexplored(w, ev: dict, tools: AgentTools) -> bool:
     return bool(risk) and max(risk.values()) > w.alpha + 0.01
 
 
+# Turns a finished LLM run into a decision record.
+# Handles proposals, drops, question answers, messages and no-change outcomes.
+# Returns None when a required action is missing, which triggers the fallback.
 def _outcome(w, ev: dict, tools: AgentTools, final: str) -> dict | None:
     """Turn the run into a decision, or None if a required action is missing (-> fallback)."""
     if tools.outcome.get("version") or tools.outcome.get("dropped"):
@@ -193,6 +214,9 @@ def _outcome(w, ev: dict, tools: AgentTools, final: str) -> dict | None:
     return dict(decision="no_change", reason=final[:300] or "no proposal", explanation={"supervisor": final[:300]})
 
 
+# Interleaves model text / thinking steps with tool calls.
+# Uses each step's 'at' index to place it at the right point in the trace.
+# Returns the merged list in the order things happened.
 def _merge(steps: list[dict], trace: list[dict]) -> list[dict]:
     """Interleave model text/thinking with tool calls in the order they happened."""
     out, k = [], 0

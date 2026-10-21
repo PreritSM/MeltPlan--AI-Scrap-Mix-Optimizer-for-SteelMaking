@@ -18,10 +18,16 @@ RECOVERY_SEEDS = 20
 RECOVERY_MIN_COV = 0.75  # nominal 0.90; 20 seeds is noisy (sd ~0.07)
 
 
+# Computes the mean absolute error between two arrays.
+# Used to score predictions on the held-out test heats.
+# Returns a plain float.
 def _mae(a, b):
     return float(np.mean(np.abs(a - b)))
 
 
+# Fits and validates the composition estimator for one element.
+# Compares baselines on held-out heats, checks PI coverage and runs a synthetic recovery test.
+# Returns metrics plus the train-only and all-heats bootstrap estimates.
 def run_element(el: str) -> dict:
     d = build(el)
     n = len(d.y)
@@ -78,6 +84,9 @@ def run_element(el: str) -> dict:
     )
 
 
+# Runs estimator validation for every element.
+# Writes data/estimates.json, consumed by the optimiser.
+# Writes and prints the reports/estimator.md summary.
 def main() -> None:
     res = [run_element(el) for el in ELEMENTS]
     (ROOT / "data").mkdir(exist_ok=True)

@@ -6,6 +6,9 @@ import numpy as np
 from .bayes import fit_bayes
 
 
+# Runs a day-blocked bootstrap of the Bayes-NNLS group content estimates.
+# Resamples whole days with replacement n times and refits the model on each draw.
+# Returns the mean, SD, 90% interval, covariance and raw draws of the estimates.
 def block_bootstrap(X, y, days, mu0, sd0, n: int = 300, seed: int = 0):
     rng = np.random.default_rng(seed)
     uniq = np.unique(days)

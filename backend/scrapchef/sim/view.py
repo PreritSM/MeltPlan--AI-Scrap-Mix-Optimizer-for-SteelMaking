@@ -6,11 +6,17 @@ import json
 from scrapchef.data.store import GROUPS, ROOT, connect, cfg
 
 
+# Loads a JSON artefact from the data directory.
+# Used for estimates, energy and back-test outputs.
+# Returns None if the file does not exist yet.
 def _j(name):
     f = ROOT / "data" / name
     return json.loads(f.read_text()) if f.exists() else None
 
 
+# Builds one Process View stage card.
+# Bundles id, lane, title, provenance, state, inputs, outputs and inspector data.
+# Returns the card as a dict for the API.
 def card(id, lane, title, prov, state, inputs, outputs, inspector=None):
     return dict(id=id, lane=lane, title=title, provenance=prov, state=state, inputs=inputs, outputs=outputs, inspector=inspector or {})
 
@@ -28,6 +34,9 @@ ACTION = {"create": "plan created", "EMAILED": "emailed", "SUPERVISOR_APPROVED":
           "SUPERSEDED": "superseded", "RELEASED": "released", "LOADING": "loading started", "DONE": "plan done"}
 
 
+# Converts a stored event into an act-log row.
+# Maps each event kind to an actor, action label and detail text.
+# Unknown kinds become a generic system row.
 def _event_row(e: dict) -> dict:
     p, k = e["payload"], e["kind"]
     if k == "message":
@@ -53,6 +62,9 @@ def _event_row(e: dict) -> dict:
     return dict(actor="system", action=k, detail="")
 
 
+# Builds the act-layer activity log for one role.
+# Merges audit transitions and events the role made or must act on, in true order.
+# Returns the last 60 rows, oldest first.
 def act_log(w, role: str) -> list[dict]:
     """Oldest first (the inspector reverses it), last 60: plan transitions this role made or must act on, then its messages, chats, issues and shop-floor events."""
     audit = w.store.audit(w.plan_id) if w.plan_id else []
@@ -69,6 +81,9 @@ def act_log(w, role: str) -> list[dict]:
     return [{k: v for k, v in r.items() if k != "_k"} for r in rows[-60:]]
 
 
+# Builds the full Process View state for the UI.
+# Assembles cards for the read, data, intelligence and act lanes with live inspector data.
+# Also returns clock, plan status, heat strip and agent status.
 def process_state(w) -> dict:
     con = connect()
     cnt = lambda t: con.execute(f"SELECT count(*) FROM {t}").fetchone()[0]

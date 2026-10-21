@@ -26,21 +26,39 @@ let tid = 0;
 let timer: any = null;
 const WHO: Record<string, string> = { email: "Email", supervisor: "Supervisor", shift_leader: "Shift leader", crane: "Crane" };
 
+// Global zustand store for backend state, phone views and UI state.
+// Provides refresh, action, playback and event-subscription helpers.
+// Shared by the Process View and the phone pane.
 export const useSim = create<S>((set, getS) => ({
   state: null, phone: {}, unread: { email: 0, supervisor: 0, shift_leader: 0, crane: 0 }, openRole: null, inspect: null,
   pulse: 0, toasts: [], playing: false, error: null,
+  // Reloads the process state and every role's phone view.
+  // Fetches all endpoints in parallel.
+  // Stores any error message for the error bar.
   refresh: async () => {
     try {
       const [state, ...ph] = await Promise.all([get("/api/state"), ...ROLES.map((r) => get(`/api/phone/${r}`))]);
       set({ state, phone: Object.fromEntries(ROLES.map((r, i) => [r, ph[i]])), error: null });
     } catch (e: any) { set({ error: String(e.message ?? e) }); }
   },
+  // Posts a user action to the API, then refreshes all state.
+  // Records the error message and rethrows on failure.
+  // Returns the API's response.
   act: async (path, body) => {
     try { const r = await post(path, body); await getS().refresh(); return r; }
     catch (e: any) { set({ error: String(e.message ?? e) }); throw e; }
   },
+  // Opens a role's phone app, or returns to the home screen with null.
+  // Clears that role's unread counter when opening it.
+  // Other roles' counters are untouched.
   setOpenRole: (r) => set((s) => ({ openRole: r, unread: r ? { ...s.unread, [r]: 0 } : s.unread })),
+  // Selects which Process View card the inspector shows.
+  // null closes the inspector.
+  // Stores only the card id.
   setInspect: (id) => set({ inspect: id }),
+  // Starts or stops automatic heat stepping.
+  // While playing, steps a heat about once a second.
+  // Stops automatically when the backend reports the plan is done.
   setPlaying: (p) => {
     set({ playing: p });
     if (timer) clearInterval(timer);
@@ -49,6 +67,9 @@ export const useSim = create<S>((set, getS) => ({
       if (r?.done) getS().setPlaying(false);
     }, 1100);
   },
+  // Loads initial state and subscribes to the backend event stream.
+  // Updates unread counters and toasts for each non-routine event.
+  // Debounces a refresh after events; returns the unsubscribe function.
   init: () => {
     getS().refresh();
     let t: any = null;

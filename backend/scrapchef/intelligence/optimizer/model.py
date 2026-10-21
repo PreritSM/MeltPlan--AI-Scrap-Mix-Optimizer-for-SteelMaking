@@ -22,6 +22,9 @@ class Estimates:
     cov: dict[str, np.ndarray]
     sigma_eps: dict[str, float]
 
+    # Loads group composition estimates from data/estimates.json.
+    # 'final' uses all cohort heats; 'boot_train' uses the train split only.
+    # Returns means, SDs, covariances and noise SD per element.
     @classmethod
     def load(cls, variant: str = "final") -> "Estimates":
         """variant 'final' = fit on all cohort heats; 'boot_train' = train-split only (back-test, no leakage)."""
@@ -44,6 +47,9 @@ class Context:
     heel_c0: dict[str, float] = field(default_factory=last_chem)
 
 
+# Builds the optimiser Context from config and estimate files.
+# Loads prices, yields, spec limits, energy costs and mill settings.
+# inventory and variant control availability limits and the estimate set.
 def make_context(spec_class: str | None = None, inventory=None, variant: str = "final") -> Context:
     pr, sp, mill = cfg("prices"), cfg("specs"), cfg("mill")
     en = ROOT / "data" / "energy.json"
@@ -57,19 +63,31 @@ def make_context(spec_class: str | None = None, inventory=None, variant: str = "
     )
 
 
+# Converts a risk level alpha into a one-sided normal z-score.
+# For example alpha=0.05 gives about 1.645.
+# Returns the z value as a float.
 def z_of(alpha: float) -> float:
     return float(norm.ppf(1 - alpha))
 
 
+# Computes a Cholesky factor of a covariance matrix.
+# Adds a tiny jitter to the diagonal for numerical stability.
+# Returns the lower-triangular factor.
 def chol(cov: np.ndarray) -> np.ndarray:
     return np.linalg.cholesky(cov + 1e-12 * np.eye(len(cov)))
 
 
+# Computes the tonnes of steel a charge actually taps.
+# It is the dot product of group yields with the charge tonnes.
+# Returns the tap as a float.
 def tap_of(ctx: Context, x: np.ndarray) -> float:
     """Tap the charge actually makes (t steel)."""
     return float(ctx.yields @ x)
 
 
+# Predicts final chemistry for a charge, per element.
+# Computes mean, SD, P95 and probability of exceeding the spec limit.
+# Uses the charge's own tap when tap_t is None.
 def predict_heat(ctx: Context, x: np.ndarray, tap_t: float | None, heel_c: dict[str, float]) -> dict[str, dict[str, float]]:
     """Mean, sd, p95, exceedance probability of final chemistry (wt %) for charge x (t per group).
     tap_t=None uses the tap the charge makes (yields . x): chemistry and cost then follow the actual steel, not a target."""
@@ -85,6 +103,9 @@ def predict_heat(ctx: Context, x: np.ndarray, tap_t: float | None, heel_c: dict[
     return out
 
 
+# Plans a horizon of heats by minimising material plus energy cost.
+# Applies tap, recipe, chemistry (aim / margin / chance) and inventory constraints.
+# Iterates on heel chemistry until it settles; returns x, status, cost and tagged constraints.
 def solve(ctx: Context, taps: list[float], mode: str = "chance", alpha: float = 0.05,
           z_override: float | dict | None = None, aim_margin: float = 0.9, frozen: dict[int, np.ndarray] | None = None):
     """Plan a horizon of heats. Returns dict(x [H,G], status, cost, duals, heel, constraints)."""
@@ -146,6 +167,9 @@ def solve(ctx: Context, taps: list[float], mode: str = "chance", alpha: float = 
     return res
 
 
+# Converts solver constraint duals into plain-language shadow prices.
+# Chance duals become $/t per 0.01 wt% headroom; inventory duals become $ per tonne.
+# Skips negligible duals and returns a list of dicts.
 def duals(ctx: Context, res, slot0: int = 1) -> list[dict]:
     """Constraint duals converted to plain units (shadow prices). slot0 = plan slot of the first solved heat."""
     out = []
