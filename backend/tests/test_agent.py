@@ -4,12 +4,12 @@ import json
 import numpy as np
 import pytest
 
-from scrapchef.intelligence.agent import loop
-from scrapchef.intelligence.agent.llm import Reply, ToolCall
-from scrapchef.intelligence.agent.policy import parse_issue
-from scrapchef.intelligence.agent.tools import AgentTools, openai_tools
-from scrapchef.sim.scenario import supplier_email
-from scrapchef.sim.world import World
+from meltplan.intelligence.agent import loop
+from meltplan.intelligence.agent.llm import Reply, ToolCall
+from meltplan.intelligence.agent.policy import parse_issue
+from meltplan.intelligence.agent.tools import AgentTools, openai_tools
+from meltplan.sim.scenario import supplier_email
+from meltplan.sim.world import World
 
 
 class FakeLLM:
@@ -53,7 +53,7 @@ def last_result(messages):
 
 # Fixture: a fresh SHADOW_REPLAY world with a 06:00 plan.
 # Created anew for each test.
-# Used by most agent and Control Suite tests.
+# Used by most agent and Mix Editor tests.
 @pytest.fixture()
 def world():
     w = World("SHADOW_REPLAY")
@@ -330,7 +330,7 @@ def test_question_answer_gets_one_rewrite_naming_the_bad_number(world):
 # The supervisor gets $ figures and the Cu P95.
 # The crane never gets a $ figure.
 def test_fallback_answer_combines_why_cost_and_risk(world):
-    from scrapchef.intelligence.agent import chat
+    from meltplan.intelligence.agent import chat
     a = chat.answer(world, "supervisor", "Why is copper binding, and what does the plan cost compared with history?")
     assert "No change recorded" not in a and "$" in a and "Cu P95" in a
     assert "$" not in chat.answer(world, "crane", "What does it cost?")
@@ -414,7 +414,7 @@ def test_llm_rebuilds_a_stale_client_once_on_connection_error(monkeypatch):
     import httpx
     import openai
     from types import SimpleNamespace
-    from scrapchef.intelligence.agent.llm import LLM
+    from meltplan.intelligence.agent.llm import LLM
 
     built, calls = [], []
 
@@ -507,7 +507,7 @@ def test_basket_complete_needs_a_released_plan(world):
         world.basket_complete(1, 99)
 
 
-# ---- Control Suite hand edits
+# ---- Mix Editor hand edits
 # Helper: moves tonnes from one group to another in a heat's mix.
 # Copies the heat's group tonnages first.
 # Returns the new mix dict.
@@ -522,7 +522,7 @@ def _shift(h, src, dst, t):
 # Uses the world's current estimates.
 # Returns (lowest-Cu group, highest-Cu group).
 def _groups_by_cu(world):
-    from scrapchef.data.store import GROUPS
+    from meltplan.data.store import GROUPS
     world._set_estimates()
     mu = world.ctx.est.mu["cu"]
     return GROUPS[int(mu.argmin())], GROUPS[int(mu.argmax())]
@@ -611,8 +611,8 @@ def test_recipe_check_follows_a_relaxed_re_plan(world):
 # Compares evaluation against predictions from measured vs planned heel.
 # They must differ, and evaluation must match the measured one.
 def test_heel_for_the_heat_after_a_tapped_one_is_the_measured_result(world):
-    from scrapchef.data.store import GROUPS
-    from scrapchef.intelligence.optimizer.model import predict_heat
+    from meltplan.data.store import GROUPS
+    from meltplan.intelligence.optimizer.model import predict_heat
     world.step_heat()
     assert world.progress[1] == "tapped"
     p = world.current_plan()
@@ -687,7 +687,7 @@ def test_views_show_only_the_heats_left_once_some_are_tapped(world):
 # Approvals, releases, grabs and emails land in the right role logs.
 # A supervisor-only note appears only in the supervisor log.
 def test_act_layer_logs_are_split_by_role(world):
-    from scrapchef.sim.view import act_log
+    from meltplan.sim.view import act_log
     world.approve(); world.release()
     p = world.current_plan()
     world.grab_done(1, 1, p.heats[0].baskets[0].items[0].mat_code, 1.0)

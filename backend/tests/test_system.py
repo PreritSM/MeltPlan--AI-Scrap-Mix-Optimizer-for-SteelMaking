@@ -3,11 +3,11 @@ import json
 import numpy as np
 import pytest
 
-from scrapchef.act.plans import PlanStore
-from scrapchef.act.roles import project
-from scrapchef.intelligence.agent import narrator
-from scrapchef.intelligence.optimizer.model import make_context, solve
-from scrapchef.sim.world import World
+from meltplan.act.plans import PlanStore
+from meltplan.act.roles import project
+from meltplan.intelligence.agent import narrator
+from meltplan.intelligence.optimizer.model import make_context, solve
+from meltplan.sim.world import World
 
 
 # Module fixture: a SIMULATED world with a 06:00 plan made.

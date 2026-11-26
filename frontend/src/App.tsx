@@ -29,7 +29,7 @@ export default function App() {
   return (
     <div id="split-root" className="root">
       {err && <div className="errbar" role="alert">{err}</div>}
-      <PanelGroup ref={group} direction="horizontal" autoSaveId="mini-scrapchef-split">
+      <PanelGroup ref={group} direction="horizontal" autoSaveId="meltplan-split">
         <Panel defaultSize={80} minSize={50} maxSize={100 - phoneMin} order={1}><ProcessView /></Panel>
         <PanelResizeHandle className="handle" onDoubleClick={() => group.current?.setLayout([80, 20])} title="Drag to resize · double-click to reset 80/20">
           <div className="grip" />

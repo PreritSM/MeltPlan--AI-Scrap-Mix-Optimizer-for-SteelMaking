@@ -26,10 +26,10 @@ function bottomLine(perT: number, rm: any) {
 // Returns null when the heat is editable.
 const lockOf = (h: any) => (h.frozen ? "frozen" : ["tapped", "loading", "loaded"].includes(h.progress) ? h.progress : null);
 
-// Control Suite: hand-edit one heat's mix with sliders.
+// Mix Editor: hand-edit one heat's mix with sliders.
 // Re-evaluates the mix live and shows cost, headroom and all violations.
 // Saves the edit as a new plan version when allowed.
-function ControlSuite({ plan, groups, onClose }: { plan: any; groups: string[]; onClose: () => void }) {
+function MixEditor({ plan, groups, onClose }: { plan: any; groups: string[]; onClose: () => void }) {
   const { act } = useSim();
   const [slot, setSlot] = useState(() => plan.heats.find((h: any) => !lockOf(h))?.slot ?? 1);
   const heat = plan.heats.find((h: any) => h.slot === slot);
@@ -47,7 +47,7 @@ function ControlSuite({ plan, groups, onClose }: { plan: any; groups: string[]; 
   const blocked = ev?.availability_violations ?? [];
   const reason = lock ? `Heat ${slot} is ${lock}: it can no longer be edited.` : total > 140 ? "The charge does not fit the furnace" : blocked.length ? "Not enough material: see the banner" : "";
   return (<div>
-    <div className="row"><b>Control Suite</b><span className="sp" /><button onClick={onClose}>Close</button></div>
+    <div className="row"><b>Mix Editor</b><span className="sp" /><button onClick={onClose}>Close</button></div>
     <select value={slot} onChange={(e) => setSlot(+e.target.value)} aria-label="heat">{plan.heats.map((h: any) => <option key={h.slot} value={h.slot}>Heat {h.slot}{lockOf(h) ? ` (${lockOf(h)})` : ""}</option>)}</select>
     {lock && <div className="small"><b>{reason}</b> Showing its prediction read-only.</div>}
     {groups.map((g) => (<div key={g}><div className="small">{g.replace("SCRAP_", "")} · {(mix[g] ?? 0).toFixed(1)} t</div>
@@ -78,7 +78,7 @@ export default function SupervisorView() {
   const [edit, setEdit] = useState(false); const [slot, setSlot] = useState(1);
   const groups = useMemo(() => state?.groups ?? [], [state]);
   if (!plan?.heats) return <div className="small">No plan yet. Use “Plan 06:00” in the Process View.</div>;
-  if (edit) return <ControlSuite plan={plan} groups={groups} onClose={() => setEdit(false)} />;
+  if (edit) return <MixEditor plan={plan} groups={groups} onClose={() => setEdit(false)} />;
   const heat = plan.heats.find((h: any) => h.slot === slot) ?? plan.heats[0];
   const canApprove = plan.status === "EMAILED";
   const dropped = plan.status === "DROPPED";

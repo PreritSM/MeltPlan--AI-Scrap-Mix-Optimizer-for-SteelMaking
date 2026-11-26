@@ -1,10 +1,10 @@
 import numpy as np
 import pytest
 
-from scrapchef.data.store import GROUPS
-from scrapchef.intelligence.optimizer.evaluate import evaluate_mix
-from scrapchef.intelligence.optimizer.model import ELS, make_context, predict_heat, solve, z_of
-from scrapchef.intelligence.optimizer.plan import build_plan
+from meltplan.data.store import GROUPS
+from meltplan.intelligence.optimizer.evaluate import evaluate_mix
+from meltplan.intelligence.optimizer.model import ELS, make_context, predict_heat, solve, z_of
+from meltplan.intelligence.optimizer.plan import build_plan
 
 
 # Module fixture providing a default optimiser context.
@@ -53,7 +53,7 @@ def test_monte_carlo_exceedance_below_alpha():
 
 # Checks evaluate_mix reproduces a built plan's numbers.
 # Compares predicted Cu mean and total cost for the same mix and heel.
-# Guards consistency between the plan builder and the Control Suite evaluator.
+# Guards consistency between the plan builder and the Mix Editor evaluator.
 def test_evaluate_matches_plan():
     ctx = make_context()
     plan = build_plan(ctx, [125.0], "t")

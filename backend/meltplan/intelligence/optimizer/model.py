@@ -1,0 +1,191 @@
+"""Uncertainty-aware blend optimiser (cvxpy). Modes: aim (LP), margin (LP), chance (SOCP)."""
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+
+import cvxpy as cp
+import numpy as np
+from scipy.stats import norm
+
+from meltplan.data.store import GROUPS, ROOT, cfg, group_yields, last_chem, recipe_bounds
+from meltplan.intelligence.estimator.massbalance import sym
+
+ELS = ["cu", "sn", "ni", "mo"]
+HEEL_PASSES, HEEL_TOL = 6, 1e-4   # A14 fixed point (wt%): 2 fixed passes left later heats ~0.2 pp above alpha; settles in 4-5
+
+
+@dataclass
+class Estimates:
+    mu: dict[str, np.ndarray]
+    sd: dict[str, np.ndarray]
+    cov: dict[str, np.ndarray]
+    sigma_eps: dict[str, float]
+
+    # Loads group composition estimates from data/estimates.json.
+    # 'final' uses all cohort heats; 'boot_train' uses the train split only.
+    # Returns means, SDs, covariances and noise SD per element.
+    @classmethod
+    def load(cls, variant: str = "final") -> "Estimates":
+        """variant 'final' = fit on all cohort heats; 'boot_train' = train-split only (back-test, no leakage)."""
+        raw = json.loads((ROOT / "data" / "estimates.json").read_text())
+        g = lambda k: {e: np.array(raw[e][variant][k]) for e in ELS}
+        return cls(g("mean"), g("sd"), g("cov"), {e: raw[e]["sigma_eps"] for e in ELS})
+
+
+@dataclass
+class Context:
+    est: Estimates
+    prices: np.ndarray                 # $/t per group (ASSUMED)
+    yields: np.ndarray                 # metallic yield per group (ASSUMED, Table H2)
+    limits: dict[str, float]           # spec class limits (ASSUMED)
+    inventory: np.ndarray | None = None  # t per group over the horizon (MOCK)
+    energy_k: np.ndarray = field(default_factory=lambda: np.zeros(len(GROUPS)))  # $/t input
+    bounds: dict[str, tuple[float, float]] = field(default_factory=recipe_bounds)
+    heel_t: float = 17.5
+    tap_tol: float = 0.05
+    heel_c0: dict[str, float] = field(default_factory=last_chem)
+
+
+# Builds the optimiser Context from config and estimate files.
+# Loads prices, yields, spec limits, energy costs and mill settings.
+# inventory and variant control availability limits and the estimate set.
+def make_context(spec_class: str | None = None, inventory=None, variant: str = "final") -> Context:
+    pr, sp, mill = cfg("prices"), cfg("specs"), cfg("mill")
+    en = ROOT / "data" / "energy.json"
+    energy_k = np.array(json.loads(en.read_text())["k_usd_per_t"]) if en.exists() else np.zeros(len(GROUPS))
+    return Context(
+        est=Estimates.load(variant), energy_k=energy_k,
+        prices=np.array([pr["groups"][g] for g in GROUPS], float),
+        yields=group_yields(),
+        limits=sp["classes"][spec_class or sp["default"]],
+        inventory=inventory, heel_t=mill["heel_t"], tap_tol=mill["tap_tol_t"],
+    )
+
+
+# Converts a risk level alpha into a one-sided normal z-score.
+# For example alpha=0.05 gives about 1.645.
+# Returns the z value as a float.
+def z_of(alpha: float) -> float:
+    return float(norm.ppf(1 - alpha))
+
+
+# Computes a Cholesky factor of a covariance matrix.
+# Adds a tiny jitter to the diagonal for numerical stability.
+# Returns the lower-triangular factor.
+def chol(cov: np.ndarray) -> np.ndarray:
+    return np.linalg.cholesky(cov + 1e-12 * np.eye(len(cov)))
+
+
+# Computes the tonnes of steel a charge actually taps.
+# It is the dot product of group yields with the charge tonnes.
+# Returns the tap as a float.
+def tap_of(ctx: Context, x: np.ndarray) -> float:
+    """Tap the charge actually makes (t steel)."""
+    return float(ctx.yields @ x)
+
+
+# Predicts final chemistry for a charge, per element.
+# Computes mean, SD, P95 and probability of exceeding the spec limit.
+# Uses the charge's own tap when tap_t is None.
+def predict_heat(ctx: Context, x: np.ndarray, tap_t: float | None, heel_c: dict[str, float]) -> dict[str, dict[str, float]]:
+    """Mean, sd, p95, exceedance probability of final chemistry (wt %) for charge x (t per group).
+    tap_t=None uses the tap the charge makes (yields . x): chemistry and cost then follow the actual steel, not a target."""
+    B = (tap_of(ctx, x) if tap_t is None else tap_t) + ctx.heel_t
+    out = {}
+    for el in ELS:
+        mean = (ctx.heel_t * heel_c[el] + ctx.est.mu[el] @ x) / B
+        var = x @ ctx.est.cov[el] @ x + ctx.est.sigma_eps[el] ** 2
+        sd = np.sqrt(var) / B
+        lim = ctx.limits[el]
+        out[el] = dict(mean=float(mean), sd=float(sd), p95=float(mean + 1.645 * sd), limit=lim,
+                       p_exceed=float(1 - norm.cdf((lim - mean) / sd)))
+    return out
+
+
+# Plans a horizon of heats by minimising material plus energy cost.
+# Applies tap, recipe, chemistry (aim / margin / chance) and inventory constraints.
+# Iterates on heel chemistry until it settles; returns x, status, cost and tagged constraints.
+def solve(ctx: Context, taps: list[float], mode: str = "chance", alpha: float = 0.05,
+          z_override: float | dict | None = None, aim_margin: float = 0.9, frozen: dict[int, np.ndarray] | None = None):
+    """Plan a horizon of heats. Returns dict(x [H,G], status, cost, duals, heel, constraints)."""
+    H, G = len(taps), len(GROUPS)
+    zd = z_override if isinstance(z_override, dict) else {e: (z_override if z_override is not None else z_of(alpha)) for e in ELS}
+    heel = [dict(ctx.heel_c0) for _ in range(H)]
+    res = None
+    for _ in range(HEEL_PASSES if (mode == "chance" and H > 1) else 1):  # A14: fixed point on heel chemistry, until it settles
+        x = cp.Variable((H, G), nonneg=True)
+        cons, tagged = [], []
+        cost_vec = ctx.prices + ctx.energy_k
+        for h in range(H):
+            T, B = taps[h], taps[h] + ctx.heel_t
+            if frozen and h in frozen:
+                cons.append(x[h] == frozen[h]); continue
+            c = ctx.yields @ x[h]
+            cons += [c >= T - ctx.tap_tol, c <= T + ctx.tap_tol]
+            tagged.append(("tap", h, None, cons[-2]))
+            tot = cp.sum(x[h])
+            for gi, g in enumerate(GROUPS):
+                lo, hi = ctx.bounds[g]
+                cons += [x[h, gi] >= lo * tot, x[h, gi] <= hi * tot]
+            for el in ELS:
+                mu, lim, z = ctx.est.mu[el], ctx.limits[el], zd[el]
+                base = ctx.heel_t * heel[h][el] + mu @ x[h]
+                if mode == "chance":
+                    L = chol(ctx.est.cov[el])
+                    lhs = base + z * cp.norm(cp.hstack([L.T @ x[h], ctx.est.sigma_eps[el]]), 2)
+                    k = lhs <= lim * B
+                elif mode == "margin":
+                    k = base + z * (ctx.est.sd[el] @ x[h]) <= lim * B
+                else:
+                    k = base <= aim_margin * lim * B
+                cons.append(k); tagged.append(("chance", h, el, k))
+        if ctx.inventory is not None:
+            for gi in range(G):
+                k = cp.sum(x[:, gi]) <= ctx.inventory[gi]
+                cons.append(k); tagged.append(("inventory", None, GROUPS[gi], k))
+        obj = cp.Minimize(cp.sum(x @ cost_vec))
+        prob = cp.Problem(obj, cons)
+        try:
+            prob.solve(solver=cp.CLARABEL)
+        except cp.error.SolverError:  # numerically hard heat: retry once with SCS, else report as unsolved
+            try:
+                prob.solve(solver=cp.SCS, eps=1e-6)
+            except cp.error.SolverError:
+                return dict(status="solver_error", x=None)
+        if prob.status not in ("optimal", "optimal_inaccurate"):
+            return dict(status=prob.status, x=None)
+        X = x.value
+        used = [dict(hh) for hh in heel]
+        for h in range(1, H):  # heel for next heat = this heat's planned P50
+            B = taps[h - 1] + ctx.heel_t
+            for el in ELS:
+                heel[h][el] = float((ctx.heel_t * heel[h - 1][el] + ctx.est.mu[el] @ X[h - 1]) / B)
+        res = dict(status=prob.status, x=X, cost=float(prob.value), heel=[dict(hh) for hh in heel], tagged=tagged, taps=taps)
+        if max(abs(heel[h][el] - used[h][el]) for h in range(H) for el in ELS) < HEEL_TOL:
+            break   # the plan was solved against the heel it produces
+    return res
+
+
+# Converts solver constraint duals into plain-language shadow prices.
+# Chance duals become $/t per 0.01 wt% headroom; inventory duals become $ per tonne.
+# Skips negligible duals and returns a list of dicts.
+def duals(ctx: Context, res, slot0: int = 1) -> list[dict]:
+    """Constraint duals converted to plain units (shadow prices). slot0 = plan slot of the first solved heat."""
+    out = []
+    for kind, h, key, con in res["tagged"]:
+        d = con.dual_value
+        if d is None or abs(float(np.sum(d))) < 1e-4:
+            continue
+        d = float(np.sum(d))
+        if kind == "chance":
+            T = res["taps"][h]; B = T + ctx.heel_t
+            per_001 = d * 0.01 * B / T      # $ per t steel per 0.01 wt% of extra headroom
+            if abs(per_001) < 0.005:          # solver noise on a slack constraint: it would read "worth $0.00/t"
+                continue
+            out.append(dict(kind=kind, heat=h, key=key, dual=d, usd_per_t_per_0p01pct=per_001,
+                            plain=f"Heat {h + slot0}: each extra 0.01% {sym(key)} headroom is worth ${per_001:.2f}/t"))
+        elif kind == "inventory":
+            out.append(dict(kind=kind, heat=None, key=key, dual=d, usd_per_t_per_0p01pct=None,
+                            plain=f"Each extra tonne of {key} would save ${abs(d):.2f}"))  # cvxpy dual of a <= row is >= 0
+    return out

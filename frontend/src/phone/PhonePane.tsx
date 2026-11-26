@@ -44,7 +44,7 @@ export default function PhonePane() {
             {toast && <div className="toast" role="status">🔔 {toast}</div>}
             {!openRole ? (
               <>
-                <div className="pbar">ScrapChef</div>
+                <div className="pbar">MeltPlan</div>
                 <div className="home">
                   {ROLES.map((r) => (
                     <button key={r} className="icon" onClick={() => setOpenRole(r)} aria-label={WHO[r]}>

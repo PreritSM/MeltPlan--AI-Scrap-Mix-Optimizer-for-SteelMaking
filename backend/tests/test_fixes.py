@@ -4,11 +4,11 @@ import os
 import numpy as np
 import pytest
 
-from scrapchef.act.plans import PlanStore
-from scrapchef.api.main import resume_seq
-from scrapchef.data.features import heel_chem
-from scrapchef.data.store import GROUPS, cfg, heat_table
-from scrapchef.sim.world import World
+from meltplan.act.plans import PlanStore
+from meltplan.api.main import resume_seq
+from meltplan.data.features import heel_chem
+from meltplan.data.store import GROUPS, cfg, heat_table
+from meltplan.sim.world import World
 
 
 # Module fixture: a SHADOW_REPLAY world without a plan.
@@ -96,8 +96,8 @@ def test_plan_editor_and_tap_are_consistent():
 # Bath mass minus yielded tap must equal the heel.
 # The median yielded tap must match the mill's target tap.
 def test_estimator_and_optimizer_share_one_yield_model():
-    from scrapchef.data.store import group_yields
-    from scrapchef.intelligence.estimator.massbalance import build
+    from meltplan.data.store import group_yields
+    from meltplan.intelligence.estimator.massbalance import build
     d = build("cu")
     assert np.allclose(d.B - d.X @ group_yields(), cfg("mill")["heel_t"])
     assert abs(np.median(d.X @ group_yields()) - cfg("mill")["target_tap_t"]) < 1.0   # planned tap = what the mill's charges make
@@ -108,7 +108,7 @@ def test_estimator_and_optimizer_share_one_yield_model():
 # Further steps report done without replaying beyond the plan.
 def test_plan_is_done_when_every_heat_is_tapped_and_play_stops():
     from fastapi.testclient import TestClient
-    import scrapchef.api.main as api
+    import meltplan.api.main as api
     w = World("SHADOW_REPLAY")
     w.make_plan(); w.approve(); w.release()
     api.world = w
@@ -143,12 +143,12 @@ def test_a_db_owned_by_another_process_is_refused_and_not_wiped(tmp_path):
     import subprocess
     import sys
     db = tmp_path / "app.sqlite"
-    owner = subprocess.Popen([sys.executable, "-c", "import sys; from scrapchef.act.plans import PlanStore; "
+    owner = subprocess.Popen([sys.executable, "-c", "import sys; from meltplan.act.plans import PlanStore; "
                               f"s = PlanStore({str(db)!r}); s.emit('t', 'k', {{}}, []); print('owned', flush=True); sys.stdin.read()"],
                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
     try:
         assert owner.stdout.readline().strip() == "owned"
-        with pytest.raises(RuntimeError, match="owned by another running ScrapChef process"):
+        with pytest.raises(RuntimeError, match="owned by another running MeltPlan process"):
             PlanStore(db)
         assert sqlite3.connect(db).execute("SELECT count(*) FROM events").fetchone()[0] == 1   # nothing was dropped
     finally:
@@ -204,7 +204,7 @@ def test_rejecting_an_unapproved_plan_does_not_reinstate_anything():
 def test_sim_clock_waits_for_approval_and_release_of_a_change():
     """E2E #45: heats must not tap on the old list while the agent's change waits for the supervisor and the shift leader."""
     from fastapi.testclient import TestClient
-    import scrapchef.api.main as api
+    import meltplan.api.main as api
     w = _released_with_pending_change()
     api.world = w
     c = TestClient(api.app)

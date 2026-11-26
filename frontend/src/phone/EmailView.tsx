@@ -16,7 +16,7 @@ export default function EmailView() {
       <button onClick={() => setOpen(null)}>← Inbox</button>
       <h4 style={{ margin: "8px 0 2px" }}>{m.subject}</h4><div className="small">To: {m.to} · {m.ts?.replace("T", " ")} · channel {m.channel}</div>
       <pre style={{ whiteSpace: "pre-wrap", font: "inherit", marginTop: 10 }}>{m.body}</pre>
-      <div className="row"><button className="primary" onClick={() => setOpenRole("supervisor")}>Open in ScrapChef</button></div>
+      <div className="row"><button className="primary" onClick={() => setOpenRole("supervisor")}>Open in MeltPlan</button></div>
       <ChatThread role="email" items={phone.email?.chat} placeholder="Reply to the agent…" />
     </div>);
   }
