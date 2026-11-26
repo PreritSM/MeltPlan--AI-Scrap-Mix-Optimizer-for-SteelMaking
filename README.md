@@ -2,7 +2,6 @@
 
 **AI scrap-mix planning for electric arc furnace steelmaking.**
 
-<!-- Screenshot placeholder: save a capture of the two-pane UI as docs/screenshot.png -->
 ![MeltPlan: Process View on the left, Phone View on the right](docs/screenshot.png)
 
 MeltPlan is a portfolio project about applying AI to manufacturing and heavy industry. It decides which scrap grades to charge into each furnace heat so the steel stays inside its chemistry limits at the lowest cost. It is built end to end on 20,806 real heats from a public dataset.
